@@ -1,0 +1,21 @@
+# Datos (se descargan de Kaggle; no se suben)
+data/
+*.zip
+kneeKLgranding/
+# Modelos y salidas
+*.h5
+*.keras
+*.pt
+*.pth
+*.ckpt
+outputs/
+runs/
+# Python / Jupyter / entornos
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+.env
+# Kaggle API key
+kaggle.json
