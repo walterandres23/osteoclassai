@@ -1,0 +1,9 @@
+README.md
+pyproject.toml
+src/osteoclass/__init__.py
+src/osteoclass/data.py
+src/osteoclass.egg-info/PKG-INFO
+src/osteoclass.egg-info/SOURCES.txt
+src/osteoclass.egg-info/dependency_links.txt
+src/osteoclass.egg-info/top_level.txt
+tests/test_data.py

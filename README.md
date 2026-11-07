@@ -21,7 +21,7 @@ This repository holds two versions of the same project:
 Reviewing the 2024 code two years later, I found four problems that make its 77% accuracy an overestimate. They are the reason for v2.
 
 1. **Duplicated images across train and test.** The project used 16,520 images, which is exactly twice the 8,260 images of the source dataset in every class (for example, 6,506 vs. 3,253 for KL0). Every radiograph appeared twice and the images were split at random, so copies of the same knee ended up on both sides.
-2. **Same patient on both sides.** File names carry the Osteoarthritis Initiative patient ID and the knee (`9003175_1.png`, `9003175_2.png`). A random split per image can put one knee of a patient in training and the other in testing, so the model is partly tested on people it has already seen.
+2. **Same patient on both sides.** File names carry the Osteoarthritis Initiative patient ID and the knee (`9003175_1.png`, `9003175_2.png`). The original dataset is already split by patient: 4,130 patients, two knees each, and no patient in more than one split (checked in the [v2 audit](v2/)). v1 merged the three splits and re-split them at random per image, so one knee of a patient could land in training and the other in testing.
 3. **Test data used for model selection.** The set passed as `validation_data` drove early stopping and learning-rate reduction. Only the third set (1,636 images) was untouched, and even that one is affected by points 1 and 2.
 4. **Attention layers that do not do what they say.** `SelfAttention` multiplies 4-D tensors, so it attends only along the width of each row instead of over the whole image. `MultiScaleAttention.get_config` refers to an attribute that is never set, which breaks saving and reloading the model.
 
