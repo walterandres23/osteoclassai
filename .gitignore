@@ -19,3 +19,5 @@ venv/
 .env
 # Kaggle API key
 kaggle.json
+*.egg-info/
+.pytest_cache/

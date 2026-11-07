@@ -57,7 +57,7 @@ def index_dataset(root: str | Path) -> pd.DataFrame:
                     continue
                 m = FILE_RE.match(img.stem)
                 rows.append({
-                    "path": str(img.relative_to(root)),
+                    "path": img.relative_to(root).as_posix(),
                     "orig_split": split_dir.name,
                     "kl": int(kl_dir.name),
                     "patient": m["patient"] if m else None,
