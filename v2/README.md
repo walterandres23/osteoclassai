@@ -34,17 +34,25 @@ ImageNet-pretrained `convnext_tiny` (timm), 224 × 224, class-weighted cross-ent
 
 For reference, Chen et al. (2019), who released this dataset, reported 69.7% accuracy and MAE 0.344 with VGG-19 and an ordinal loss. This baseline is in the same range with plain cross-entropy.
 
+<p align="center">
+  <img src="media/confusion_test.png" width="420" alt="Confusion matrix on the test set">
+  <img src="media/roc_oa_test.png" width="360" alt="ROC curve for KL >= 2 on the test set">
+</p>
+<p align="center"><img src="media/training_curves.png" width="700" alt="Training loss and validation QWK per epoch"></p>
+
+Most errors are between neighboring grades, and KL1 ("doubtful") is the hardest class: radiologists also disagree most on it. No KL0 knee was predicted as KL3–4, and no KL4 knee as KL0–2.
+
 ## Next
 
-1. Ordinal-aware training (ordinal loss or CORAL) and higher resolution.
-2. Grad-CAM to check that the model looks at the joint space.
+1. Grad-CAM to check that the model looks at the joint space (`notebooks/03_gradcam.ipynb`).
+2. Ordinal-aware training (ordinal loss or CORAL) and higher resolution.
 3. Small web demo: upload an X-ray, get the grade and the heat map.
 
 ## How to run
 
 `notebooks/02_entrenamiento.ipynb` (Colab, GPU): clones this repo, downloads the dataset with `kagglehub`, runs the audit and the training, and copies the results to Google Drive.
 
-Locally: `pip install -e .` then `python -m osteoclass.data ...` and `python -m osteoclass.train --root <dataset> --splits outputs/data/splits.csv`. Tests: `pytest -q tests`.
+Locally: `pip install -e .` then `python -m osteoclass.data ...` and `python -m osteoclass.train --root <dataset> --splits outputs/data/splits.csv`. Figures: `python -m osteoclass.figures --run <run folder> --out media`. Tests: `pytest -q tests`.
 
 ## Reference
 
