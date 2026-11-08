@@ -42,11 +42,16 @@ For reference, Chen et al. (2019), who released this dataset, reported 69.7% acc
 
 Most errors are between neighboring grades, and KL1 ("doubtful") is the hardest class: radiologists also disagree most on it. No KL0 knee was predicted as KL3–4, and no KL4 knee as KL0–2.
 
+## Where the model looks (Grad-CAM)
+
+<p align="center"><img src="media/gradcam_test.png" width="900" alt="Grad-CAM on one correctly classified test knee per KL grade"></p>
+
+On one correctly classified test knee per grade, the heat maps sit on the **tibiofemoral joint space**: the medial and lateral margins, where joint-space narrowing and osteophytes show up, and the tibial spines. For KL3–4 the attention concentrates on the most damaged compartment. The model is not relying on text, markers or image borders. These are five examples chosen among correct predictions, so they illustrate the behavior but do not prove it for every image.
+
 ## Next
 
-1. Grad-CAM to check that the model looks at the joint space (`notebooks/03_gradcam.ipynb`).
-2. Ordinal-aware training (ordinal loss or CORAL) and higher resolution.
-3. Small web demo: upload an X-ray, get the grade and the heat map.
+1. Ordinal-aware training (ordinal loss or CORAL) and higher resolution.
+2. Small web demo: upload an X-ray, get the grade and the heat map.
 
 ## How to run
 
