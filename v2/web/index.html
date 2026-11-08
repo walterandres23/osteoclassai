@@ -40,7 +40,7 @@
 <main>
   <h1>OsteoClassAI · Knee osteoarthritis grading</h1>
   <p class="sub">Kellgren-Lawrence grade from a knee X-ray, computed <strong>entirely in your browser</strong>: the image never leaves your device.
-  ConvNeXt-Tiny, patient-disjoint test set: QWK 0.851, AUC 0.943 for KL ≥ 2.
+  ConvNeXt-Tiny with an ordinal loss, patient-disjoint test set: QWK 0.859, AUC 0.951 for KL ≥ 2.
   <a href="https://github.com/walterandres23/osteoclassai">Code and evaluation</a></p>
 
   <div class="grid">
@@ -125,7 +125,12 @@ function toTensor(img) {
   ctx.putImageData(out, 0, 0);
   const data = new Float32Array(3 * SIZE * SIZE);
   for (let ch = 0; ch < 3; ch++) for (let i = 0; i < SIZE * SIZE; i++) data[ch * SIZE * SIZE + i] = (gray[i] - MEAN[ch]) / STD[ch];
-  return { tensor: new ort.Tensor("float32", data, [1, 3, SIZE, SIZE]), gray };
+  // left-right mirror for test-time augmentation (same as the evaluation)
+  const flip = new Float32Array(data.length);
+  for (let ch = 0; ch < 3; ch++) for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++)
+    flip[ch * SIZE * SIZE + y * SIZE + x] = data[ch * SIZE * SIZE + y * SIZE + (SIZE - 1 - x)];
+  return { tensor: new ort.Tensor("float32", data, [1, 3, SIZE, SIZE]),
+           tensorFlip: new ort.Tensor("float32", flip, [1, 3, SIZE, SIZE]), gray };
 }
 
 function softmax(a) { const m = Math.max(...a); const e = a.map(v => Math.exp(v - m)); const s = e.reduce((x, y) => x + y); return e.map(v => v / s); }
@@ -158,12 +163,17 @@ async function run(img) {
   if (!session) { $("status").textContent = "The model is still loading…"; return; }
   $("status").textContent = "Running…";
   const t0 = performance.now();
-  const { tensor, gray } = toTensor(img);
+  const { tensor, tensorFlip, gray } = toTensor(img);
   const out = await session.run({ image: tensor });
-  const probs = softmax(Array.from(out.logits.data));
+  const outF = await session.run({ image: tensorFlip });
+  const pa = softmax(Array.from(out.logits.data)), pb = softmax(Array.from(outF.logits.data));
+  const probs = pa.map((p, i) => (p + pb[i]) / 2);          // TTA: average image and mirror
   const k = probs.indexOf(Math.max(...probs));
   const [, , h, w] = out.cam.dims;
-  drawCam(gray, Array.from(out.cam.data.slice(k * h * w, (k + 1) * h * w)), h, w);
+  const cam = new Array(h * w);                              // mirror the second map back, then average
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++)
+    cam[y * w + x] = (out.cam.data[k * h * w + y * w + x] + outF.cam.data[k * h * w + y * w + (w - 1 - x)]) / 2;
+  drawCam(gray, cam, h, w);
   const oa = probs[2] + probs[3] + probs[4];
   $("result").innerHTML =
     `<p class="pred">Predicted: ${GRADES[k]}</p>` +

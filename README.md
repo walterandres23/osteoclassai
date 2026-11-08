@@ -10,11 +10,11 @@ This repository holds two versions of the same project:
 |---|---|---|
 | Context | Course project, Electromedicine, Universidad de Ibagué. Shown at the 48th METIE | Personal follow-up that fixes the v1 methodology |
 | Input | Sobel edge maps | Original radiographs |
-| Model | VGG19 + custom attention layers (Keras) | ConvNeXt-Tiny (PyTorch, timm), class-balanced training |
+| Model | VGG19 + custom attention layers (Keras) | ConvNeXt-Tiny (PyTorch, timm), ordinal loss (SORD) + flip TTA |
 | Classes | 3 groups (KL0 / KL1–2 / KL3–4) | 5 KL grades + binary KL ≥ 2 |
 | Split | Random, per image (leaks) | Original **patient-disjoint** split, audited |
-| Test result, 3 classes | 77.1% accuracy (inflated by leakage, see below) | **78.6%** (95% CI 76.4–80.7%) on a clean, patient-disjoint test set |
-| Test result, 5 grades | – | **QWK 0.851**, 67.3% accuracy; KL ≥ 2: AUC 0.943, sens. 77.5%, spec. 94.7% |
+| Test result, 3 classes | 77.1% accuracy (inflated by leakage, see below) | **81.3%** (95% CI 79.2–83.2%) on a clean, patient-disjoint test set |
+| Test result, 5 grades | – | **QWK 0.867**, 70.4% accuracy, MAE 0.327; KL ≥ 2: AUC 0.955, sens. 77.1%, spec. 94.8% |
 | Folder | [`v1-2024/`](v1-2024/) | [`v2/`](v2/) |
 
 <p align="center"><img src="v1-2024/media/interface.jpg" width="720" alt="v1 desktop interface: original X-ray, Sobel edges and predicted class"></p>
