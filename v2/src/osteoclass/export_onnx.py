@@ -53,9 +53,50 @@ def export(ckpt: str | Path, out: str | Path, opset: int = 17) -> Path:
     return out
 
 
-def quantize(src: Path, dst: Path) -> Path:
-    from onnxruntime.quantization import QuantType, quantize_dynamic
-    quantize_dynamic(str(src), str(dst), weight_type=QuantType.QInt8)
+def quantize(src: Path, dst: Path, min_size: int = 4096) -> Path:
+    """Weight-only int8: store large weights as int8 + DequantizeLinear (per output channel).
+
+    Compute stays in float32, so the graph only uses standard ops that ONNX Runtime Web
+    supports (dynamic quantization emits ConvInteger, which the browser build lacks).
+    The file is about 4x smaller.
+    """
+    import onnx
+    from onnx import helper, numpy_helper
+
+    model = onnx.load(str(src))
+    g = model.graph
+    consumers: dict[str, list[tuple[str, int]]] = {}
+    for n in g.node:
+        for i, name in enumerate(n.input):
+            consumers.setdefault(name, []).append((n.op_type, i))
+
+    keep, new_nodes = [], []
+    for init in g.initializer:
+        w = numpy_helper.to_array(init)
+        if w.dtype != np.float32 or w.ndim < 2 or w.size < min_size:
+            keep.append(init)
+            continue
+        uses = consumers.get(init.name, [])
+        axis = w.ndim - 1 if any(op == "MatMul" and i == 1 for op, i in uses) else 0
+        red = tuple(d for d in range(w.ndim) if d != axis)
+        scale = (np.abs(w).max(axis=red) / 127.0).astype(np.float32)
+        scale[scale == 0] = 1.0
+        shape = [1] * w.ndim
+        shape[axis] = -1
+        q = np.clip(np.round(w / scale.reshape(shape)), -127, 127).astype(np.int8)
+        keep += [numpy_helper.from_array(q, init.name + "_q"),
+                 numpy_helper.from_array(scale, init.name + "_scale"),
+                 numpy_helper.from_array(np.zeros_like(scale, dtype=np.int8), init.name + "_zp")]
+        new_nodes.append(helper.make_node("DequantizeLinear",
+                                          [init.name + "_q", init.name + "_scale", init.name + "_zp"],
+                                          [init.name], axis=axis, name=init.name + "_dq"))
+    del g.initializer[:]
+    g.initializer.extend(keep)
+    nodes = new_nodes + list(g.node)
+    del g.node[:]
+    g.node.extend(nodes)
+    onnx.checker.check_model(model)
+    onnx.save(model, str(dst))
     return dst
 
 
@@ -73,7 +114,7 @@ def main(argv=None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--out", default="web/model.onnx")
-    ap.add_argument("--quantize", action="store_true", help="also write an int8 model (about 4x smaller)")
+    ap.add_argument("--quantize", action="store_true", help="also write a weight-only int8 model (about 4x smaller, browser-compatible)")
     ap.add_argument("--check-root", help="dataset root, to compare fp32 vs int8 on test images")
     ap.add_argument("--check-pred", help="pred_test.csv with the image paths")
     ap.add_argument("--check-n", type=int, default=300)

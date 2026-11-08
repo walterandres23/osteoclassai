@@ -23,4 +23,7 @@ def test_cam_wrapper_and_onnx(tmp_path):
     import onnxruntime as ort
     out = ort.InferenceSession(str(fp32)).run(None, {"image": x.numpy()})
     assert np.allclose(out[0], logits.detach().numpy(), atol=1e-4)
-    assert 0 <= agreement(fp32, int8, [x.numpy()]) <= 1
+    assert agreement(fp32, int8, [x.numpy()]) == 1
+    import onnx
+    ops = {n.op_type for n in onnx.load(str(int8)).graph.node}
+    assert not ops & {"ConvInteger", "MatMulInteger", "DynamicQuantizeLinear"}
