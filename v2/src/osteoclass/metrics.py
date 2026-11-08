@@ -6,9 +6,32 @@ from sklearn.metrics import (accuracy_score, cohen_kappa_score, confusion_matrix
                              f1_score, roc_auc_score)
 
 
-def kl5_metrics(y: np.ndarray, prob: np.ndarray) -> dict:
-    """5-class KL grading. ``prob`` has shape (n, 5)."""
-    pred = prob.argmax(1)
+def decode(prob: np.ndarray, cuts=None) -> np.ndarray:
+    """Grade from probabilities: argmax, or the expected grade cut at ``cuts`` (4 ascending values)."""
+    if cuts is None:
+        return prob.argmax(1)
+    expected = prob @ np.arange(prob.shape[1])
+    return np.searchsorted(np.asarray(cuts), expected)
+
+
+def tune_cuts(y: np.ndarray, prob: np.ndarray, iters: int = 3) -> list[float]:
+    """Cut points on the expected grade that maximize QWK (fit on validation only)."""
+    cuts = [0.5, 1.5, 2.5, 3.5]
+    grid = np.linspace(0, 4, 161)
+    for _ in range(iters):
+        for i in range(4):
+            lo = cuts[i - 1] + 0.01 if i else 0.0
+            hi = cuts[i + 1] - 0.01 if i < 3 else 4.0
+            best = max((c for c in grid if lo <= c <= hi),
+                       key=lambda c: cohen_kappa_score(y, decode(prob, cuts[:i] + [c] + cuts[i + 1:]),
+                                                       weights="quadratic"))
+            cuts[i] = float(best)
+    return cuts
+
+
+def kl5_metrics(y: np.ndarray, prob: np.ndarray, cuts=None) -> dict:
+    """5-class KL grading. ``prob`` has shape (n, 5); ``cuts`` switches to expected-grade decoding."""
+    pred = decode(prob, cuts)
     oa_true = (y >= 2).astype(int)
     oa_prob = prob[:, 2:].sum(1)
     out = {

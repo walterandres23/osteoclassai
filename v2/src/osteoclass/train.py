@@ -22,7 +22,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from .dataset import KneeDataset, build_transforms
-from .metrics import bootstrap_ci, kl5_metrics
+from .metrics import bootstrap_ci, kl5_metrics, tune_cuts
 
 
 def class_weights(labels: np.ndarray, n_classes: int) -> torch.Tensor:
@@ -31,14 +31,35 @@ def class_weights(labels: np.ndarray, n_classes: int) -> torch.Tensor:
     return torch.tensor(w, dtype=torch.float32)
 
 
+class SORDLoss(nn.Module):
+    """Soft ordinal labels (Diaz & Marathe, CVPR 2019): neighbors of the true grade get some target
+    mass, so predicting KL3 for a KL2 knee costs less than predicting KL0."""
+
+    def __init__(self, n_classes: int = 5, alpha: float = 2.0, weight: torch.Tensor | None = None):
+        super().__init__()
+        ranks = torch.arange(n_classes, dtype=torch.float32)
+        self.register_buffer("targets", torch.softmax(-alpha * (ranks[None] - ranks[:, None]) ** 2, 1))
+        self.weight = weight
+
+    def forward(self, logits, y):
+        loss = -(self.targets[y] * torch.log_softmax(logits.float(), 1)).sum(1)
+        if self.weight is not None:
+            w = self.weight.to(loss.device)[y]
+            return (loss * w).sum() / w.sum()
+        return loss.mean()
+
+
 @torch.no_grad()
-def predict(model, loader, device) -> tuple[np.ndarray, np.ndarray]:
+def predict(model, loader, device, tta: bool = False) -> tuple[np.ndarray, np.ndarray]:
     model.eval()
     probs, ys = [], []
     for x, y in loader:
+        x = x.to(device, non_blocking=True)
         with torch.autocast(device.type, enabled=device.type == "cuda"):
-            logits = model(x.to(device, non_blocking=True))
-        probs.append(torch.softmax(logits.float(), 1).cpu().numpy())
+            p = torch.softmax(model(x).float(), 1)
+            if tta:  # left/right mirror
+                p = (p + torch.softmax(model(torch.flip(x, dims=[3])).float(), 1)) / 2
+        probs.append(p.cpu().numpy())
         ys.append(y.numpy())
     return np.concatenate(ys), np.concatenate(probs)
 
@@ -57,6 +78,9 @@ def main(argv=None) -> None:
     ap.add_argument("--bootstrap", type=int, default=1000)
     ap.add_argument("--limit", type=int, default=0, help="debug: use only N images per split")
     ap.add_argument("--no-pretrained", action="store_true")
+    ap.add_argument("--loss", choices=["ce", "sord"], default="ce")
+    ap.add_argument("--sord-alpha", type=float, default=2.0)
+    ap.add_argument("--tta", action="store_true", help="average with the horizontally flipped image")
     ap.add_argument("--out", default="outputs/runs/run")
     args = ap.parse_args(argv)
 
@@ -78,7 +102,9 @@ def main(argv=None) -> None:
                         pin_memory=device.type == "cuda") for s in ds}
 
     model = timm.create_model(args.model, pretrained=not args.no_pretrained, num_classes=5).to(device)
-    crit = nn.CrossEntropyLoss(weight=class_weights(ds["train"].labels, 5).to(device), label_smoothing=0.05)
+    cw = class_weights(ds["train"].labels, 5).to(device)
+    crit = (SORDLoss(5, args.sord_alpha, cw).to(device) if args.loss == "sord"
+            else nn.CrossEntropyLoss(weight=cw, label_smoothing=0.05))
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.05)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, epochs=args.epochs,
                                                 steps_per_epoch=max(1, len(dl["train"])), pct_start=0.1)
@@ -99,7 +125,7 @@ def main(argv=None) -> None:
             sched.step()
             total += loss.item() * len(y)
             n += len(y)
-        yv, pv = predict(model, dl["val"], device)
+        yv, pv = predict(model, dl["val"], device, args.tta)
         mv = kl5_metrics(yv, pv)
         row = {"epoch": epoch, "train_loss": total / n, **{f"val_{k}": v for k, v in mv.items()},
                "seconds": round(time.time() - t0, 1)}
@@ -119,10 +145,14 @@ def main(argv=None) -> None:
     # Final evaluation: best checkpoint, test split, once.
     model.load_state_dict(torch.load(out / "best.pt", map_location=device)["state_dict"])
     results = {}
+    preds = {s: predict(model, dl[s], device, args.tta) for s in ("val", "test")}
+    cuts = tune_cuts(*preds["val"])          # fitted on validation only
+    results["expected_grade_cuts"] = cuts
     for s in ("val", "test"):
-        y, p = predict(model, dl[s], device)
+        y, p = preds[s]
         groups = parts[s].patient.astype(str).to_numpy()
         results[s] = bootstrap_ci(kl5_metrics, y, p, groups, n=args.bootstrap)
+        results[f"{s}_cuts"] = bootstrap_ci(lambda a, b: kl5_metrics(a, b, cuts), y, p, groups, n=args.bootstrap)
         pd.DataFrame({"path": parts[s].path.to_numpy(), "patient": groups, "kl": y,
                       **{f"p{k}": p[:, k] for k in range(5)}}).to_csv(out / f"pred_{s}.csv", index=False)
     results["config"] = vars(args)
@@ -131,6 +161,10 @@ def main(argv=None) -> None:
     print(f"TEST  qwk {t['qwk']['value']:.3f} [{t['qwk']['ci_low']:.3f}-{t['qwk']['ci_high']:.3f}]  "
           f"acc {t['accuracy']['value']:.3f}  OA(KL>=2) sens {t['oa_sensitivity']['value']:.3f} "
           f"spec {t['oa_specificity']['value']:.3f} auc {t['oa_auc']['value']:.3f}")
+    c = results["test_cuts"]
+    print(f"TEST (expected grade, val-tuned cuts {[round(v, 2) for v in cuts]})  qwk {c['qwk']['value']:.3f} "
+          f"[{c['qwk']['ci_low']:.3f}-{c['qwk']['ci_high']:.3f}]  acc {c['accuracy']['value']:.3f}  "
+          f"mae {c['mae_grade']['value']:.3f}")
 
 
 if __name__ == "__main__":
