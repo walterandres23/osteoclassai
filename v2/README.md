@@ -48,10 +48,19 @@ Most errors are between neighboring grades, and KL1 ("doubtful") is the hardest 
 
 On one correctly classified test knee per grade, the heat maps sit on the **tibiofemoral joint space**: the medial and lateral margins, where joint-space narrowing and osteophytes show up, and the tibial spines. For KL3–4 the attention concentrates on the most damaged compartment. The model is not relying on text, markers or image borders. These are five examples chosen among correct predictions, so they illustrate the behavior but do not prove it for every image.
 
+## Live demo
+
+**<https://huggingface.co/spaces/walterandres23/osteoclassai>**
+
+<p align="center"><img src="media/demo_web.png" width="760" alt="In-browser demo grading a KL2 knee"></p>
+
+The model is exported to ONNX (`osteoclass.export_onnx`) with two outputs: the logits and a class activation map (the classifier applied at every location of the last feature map, so no gradients are needed). Weights are stored as int8 per output channel and dequantized on load: 111 MB → 28 MB, with **100% agreement** with the float model on 300 test images. The page (`web/index.html`) runs it with ONNX Runtime Web in about 2 s on a laptop CPU, and the X-ray never leaves the device. Hosted as a free static Hugging Face Space (`notebooks/04_publicar_demo.ipynb`).
+
+`app/` holds an equivalent Gradio version with Grad-CAM, for running locally (`python app/app.py` with `best.pt` next to it).
+
 ## Next
 
 1. Ordinal-aware training (ordinal loss or CORAL) and higher resolution.
-2. Small web demo: upload an X-ray, get the grade and the heat map.
 
 ## How to run
 

@@ -2,6 +2,8 @@
 
 **Knee osteoarthritis grading from X-rays with deep learning (Kellgren-Lawrence scale).**
 
+**▶ [Live demo](https://huggingface.co/spaces/walterandres23/osteoclassai)**: upload a knee X-ray and get the KL grade and a heat map. The model runs in your browser (ONNX Runtime Web), so the image never leaves your device.
+
 This repository holds two versions of the same project:
 
 | | v1 (2024) | v2 (2026) |
