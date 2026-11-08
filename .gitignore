@@ -21,3 +21,4 @@ venv/
 kaggle.json
 *.egg-info/
 .pytest_cache/
+*.onnx
