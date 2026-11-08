@@ -1,0 +1,10 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
+timm
+gradio
+matplotlib
+scikit-learn
+pandas
+pillow
+osteoclass @ git+https://github.com/walterandres23/osteoclassai.git#subdirectory=v2
