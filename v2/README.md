@@ -99,3 +99,5 @@ Locally: `pip install -e .` then `python -m osteoclass.data ...` and `python -m 
 Chen P, Gao L, Shi X, Allen K, Yang L. Fully automatic knee osteoarthritis severity grading using deep neural networks with a novel ordinal loss. *Computerized Medical Imaging and Graphics* 75 (2019) 84–92. doi:10.1016/j.compmedimag.2019.06.002
 
 Díaz R, Marathe A. Soft labels for ordinal regression. *CVPR* 2019, 4738–4747.
+
+Tiulpin A, Thevenot J, Rahtu E, Lehenkari P, Saarakkala S. Automatic knee osteoarthritis diagnosis from plain radiographs: a deep learning-based approach. *Scientific Reports* 8 (2018) 1727. doi:10.1038/s41598-018-20132-7
