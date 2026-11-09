@@ -78,9 +78,9 @@ On one correctly classified test knee per grade, the heat maps sit on the **tibi
 
 **<https://huggingface.co/spaces/walterandres23/osteoclassai>**
 
-<p align="center"><img src="media/demo_web.png" width="760" alt="In-browser demo grading a KL2 knee"></p>
+<p align="center"><img src="media/demo_web.png" width="760" alt="In-browser demo grading a KL4 knee"></p>
 
-The demo runs **model A** (224 px): it is almost as good as B and keeps the page fast. Like the evaluation, it averages the image and its mirror. The model is exported to ONNX (`osteoclass.export_onnx`) with two outputs: the logits and a class activation map (the classifier applied at every location of the last feature map, so no gradients are needed). Weights are stored as int8 per output channel and dequantized on load: 111 MB → 28 MB, with **100% agreement** with the float model on 300 test images. The page (`web/index.html`) runs it with ONNX Runtime Web in about 2 s on a laptop CPU, and the X-ray never leaves the device. Hosted as a free static Hugging Face Space (`notebooks/04_publicar_demo.ipynb`).
+The demo runs **model A** (224 px): it is almost as good as B and keeps the page fast. Like the evaluation, it averages the image and its mirror. The model is exported to ONNX (`osteoclass.export_onnx`) with two outputs: the logits and a class activation map (the classifier applied at every location of the last feature map, so no gradients are needed). Weights are stored as int8 per output channel and dequantized on load: 111 MB → 28 MB, with **99% agreement** with the float model on 300 test images. The page (`web/index.html`) runs it with ONNX Runtime Web in about 4 s on a laptop CPU (two passes, image and mirror), and the X-ray never leaves the device. Hosted as a free static Hugging Face Space (`notebooks/04_publicar_demo.ipynb`).
 
 `app/` holds an equivalent Gradio version with Grad-CAM, for running locally (`python app/app.py` with `best.pt` next to it).
 
