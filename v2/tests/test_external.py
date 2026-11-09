@@ -5,7 +5,7 @@ import timm
 import torch
 from PIL import Image
 
-from osteoclass.external import audit, load_gray, main, pad_square
+from osteoclass.external import audit, joint_box, load_gray, main, pad_square
 
 NAMES = ["0Normal", "1Doubtful", "2Mild", "3Moderate", "4Severe"]
 
@@ -59,6 +59,14 @@ def test_load_and_pad(tmp_path):
     assert sq.size == (300, 300) and np.asarray(sq)[0].max() == 0
 
 
+def test_joint_box():
+    a = np.full((162, 300), 20, np.uint8)
+    a[:, 120:220] = 200                       # knee: bright columns 120-219
+    a[100:106, 120:220] = 90                  # joint line at rows 100-105
+    x, y, s = joint_box(Image.fromarray(a))
+    assert abs((x + s / 2) - 170) <= 2 and abs((y + s / 2) - 102) <= 4 and abs(s - 111) <= 2
+
+
 def test_external_smoke(tmp_path):
     root = tmp_path / "data"
     _fake_dataset(root)
@@ -68,8 +76,10 @@ def test_external_smoke(tmp_path):
     torch.save({"model": "resnet18", "size": 64, "state_dict": m.state_dict()}, run / "best.pt")
     (run / "results.json").write_text(json.dumps({"config": {"tta": True}}))
     out = tmp_path / "out"
-    main(["--root", str(root), "--runs", str(run), "--out", str(out), "--bootstrap", "20"])
+    main(["--root", str(root), "--runs", str(run), "--out", str(out), "--bootstrap", "20",
+          "--exploratory"])
     res = json.loads((out / "results.json").read_text())
     r = res["models"]["run"]
     assert r["tta"] and r["single_pad"]["n"] == 8 and r["bilateral_pad"]["n"] == 2
     assert "qwk" in r["single_stretch"] and (out / "audit.csv").exists()
+    assert "qwk" in r["exploratory_single_joint"] and "qwk" in r["exploratory_recalibrated_pad"]

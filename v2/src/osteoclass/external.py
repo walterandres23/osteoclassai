@@ -15,6 +15,13 @@ The protocol was fixed before looking at any prediction:
    analysis: plain resize (stretched). 16-bit images are scaled to 8 bits.
 6. Models are used as trained (frozen), with the same decoding and TTA as in their own evaluation.
 
+Exploratory analyses (--exploratory), added AFTER seeing the main results and reported separately:
+the main results showed a systematic over-grading with the order of grades preserved, and the padded
+knees are about half the scale of the training crops. So (a) "joint": a square crop centered on the
+joint whose side is the knee width / 0.9, the field of view of the Chen et al. crops; and (b) split-half
+recalibration: expected-grade cut points fitted on half of the knees, scored on the other half
+(20 random splits by cluster, both directions).
+
 Usage:
     python -m osteoclass.external --root "<...>/Knee X-ray Images" \
         --runs <run_dir> [<run_dir> ...] --out outputs/external/gornale
@@ -55,6 +62,32 @@ def pad_square(img: Image.Image) -> Image.Image:
     s = max(w, h)
     out = Image.new("L", (s, s), 0)
     out.paste(img, ((s - w) // 2, (s - h) // 2))
+    return out
+
+
+def joint_box(img: Image.Image, fill: float = 0.9) -> tuple[int, int, int]:
+    """Square box (x, y, side) centered on the knee joint, without training: the knee is the widest run of
+    bright (bone) columns, the joint line the darkest row band between 25 % and 75 % of the height."""
+    from scipy.ndimage import uniform_filter1d
+    a = np.asarray(img.convert("L"), dtype=np.float32)
+    h, w = a.shape
+    col = uniform_filter1d(a.mean(0), 9)
+    lo, hi = np.percentile(col, 5), col.max()
+    idx = np.flatnonzero(col > lo + 0.6 * (hi - lo))
+    runs = np.split(idx, np.flatnonzero(np.diff(idx) > 3) + 1)
+    run = max(runs, key=len)
+    x0, x1 = int(run[0]), int(run[-1])
+    row = uniform_filter1d(a[:, x0:x1 + 1].mean(1), 5)
+    b0, b1 = int(h * 0.25), int(h * 0.75)
+    cy = b0 + int(np.argmin(row[b0:b1]))
+    side = max(8, int(round((x1 - x0 + 1) / fill)))
+    return int((x0 + x1) / 2 - side / 2), int(cy - side / 2), side
+
+
+def crop_joint(img: Image.Image) -> Image.Image:
+    x, y, s = joint_box(img)
+    out = Image.new("L", (s, s), 0)
+    out.paste(img.convert("L"), (-x, -y))
     return out
 
 
@@ -163,7 +196,30 @@ def predict_images(model, images: list[Image.Image], size: int, tta: bool, devic
 
 
 def prepare(img: Image.Image, mode: str) -> Image.Image:
-    return pad_square(img) if mode == "pad" else img
+    if mode == "pad":
+        return pad_square(img)
+    if mode == "joint":
+        return crop_joint(img)
+    return img
+
+
+def split_half_recalibration(y, prob, groups, n_splits: int = 20) -> dict:
+    """Fit expected-grade cut points on half of the clusters, score the other half; both directions."""
+    from .metrics import decode, tune_cuts
+    g3 = lambda k: np.select([k == 0, k <= 2], [0, 1], 2)
+    rows = []
+    for seed in range(n_splits):
+        cl = np.unique(groups)
+        np.random.default_rng(seed).shuffle(cl)
+        a = np.isin(groups, cl[: len(cl) // 2])
+        for fit, ev in ((a, ~a), (~a, a)):
+            cuts = tune_cuts(y[fit], prob[fit])
+            m = kl5_metrics(y[ev], prob[ev], cuts)
+            pred = decode(prob[ev], cuts)
+            rows.append((m["qwk"], m["accuracy"], m["mae_grade"], float((g3(pred) == g3(y[ev])).mean())))
+    r = np.array(rows)
+    return {k: {"mean": float(r[:, i].mean()), "min": float(r[:, i].min()), "max": float(r[:, i].max())}
+            for i, k in enumerate(("qwk", "accuracy", "mae_grade", "accuracy_3class"))}
 
 
 def three_class_accuracy(y, prob) -> float:
@@ -179,6 +235,10 @@ def evaluate(y, prob, groups, n_boot: int) -> dict:
     res["per_grade_accuracy"] = {int(k): float((pred[y == k] == k).mean()) for k in np.unique(y)}
     res["confusion"] = confusion_matrix(y, pred, labels=list(range(5))).tolist()
     res["n"] = int(len(y))
+    from scipy.stats import spearmanr
+    res["spearman_expected_grade"] = float(spearmanr(prob @ np.arange(prob.shape[1]), y).correlation)
+    res["mean_expected_grade_by_true_grade"] = {int(k): float((prob[y == k] @ np.arange(5)).mean())
+                                                for k in np.unique(y)}
     return res
 
 
@@ -188,6 +248,8 @@ def main(argv=None) -> None:
     ap.add_argument("--runs", nargs="+", required=True, help="run folders with best.pt (and results.json)")
     ap.add_argument("--out", default="outputs/external/gornale")
     ap.add_argument("--bootstrap", type=int, default=1000)
+    ap.add_argument("--exploratory", action="store_true",
+                    help="also run the post-hoc analyses: joint-centered crop and split-half recalibration")
     args = ap.parse_args(argv)
 
     out = Path(args.out)
@@ -213,10 +275,14 @@ def main(argv=None) -> None:
     for run in args.runs:
         model, size, tta, name = load_run(run, device)
         r = {"size": size, "tta": tta}
-        for mode in ("pad", "stretch"):
+        modes = ("pad", "stretch", "joint") if args.exploratory else ("pad", "stretch")
+        for mode in modes:
             p = predict_images(model, [prepare(im, mode) for im in imgs_single], size, tta, device)
             y = single.grade_I.to_numpy()
-            r[f"single_{mode}"] = evaluate(y, p, single.cluster.to_numpy(), args.bootstrap)
+            key = f"exploratory_single_{mode}" if mode == "joint" else f"single_{mode}"
+            r[key] = evaluate(y, p, single.cluster.to_numpy(), args.bootstrap)
+            if args.exploratory and mode in ("pad", "joint"):
+                r[f"exploratory_recalibrated_{mode}"] = split_half_recalibration(y, p, single.cluster.to_numpy())
             pd.DataFrame({"path": single.path, "cluster": single.cluster, "kl": y,
                           **{f"p{k}": p[:, k] for k in range(5)}}).to_csv(out / f"pred_{name}_{mode}.csv", index=False)
         if len(bilat):
@@ -230,6 +296,11 @@ def main(argv=None) -> None:
               f"  acc {s['accuracy']['value']:.3f}  mae {s['mae_grade']['value']:.3f}"
               f"  auc(KL>=2) {s['oa_auc']['value']:.3f}  3-class {s['accuracy_3class']:.3f}"
               f"  | stretch qwk {r['single_stretch']['qwk']['value']:.3f}", flush=True)
+        if args.exploratory:
+            j, rp, rj = r["exploratory_single_joint"], r["exploratory_recalibrated_pad"], r["exploratory_recalibrated_joint"]
+            print(f"{'':28s} EXPLORATORY joint crop qwk {j['qwk']['value']:.3f} [{j['qwk']['ci_low']:.3f}-"
+                  f"{j['qwk']['ci_high']:.3f}]  acc {j['accuracy']['value']:.3f}  auc(KL>=2) {j['oa_auc']['value']:.3f}"
+                  f"  | recalibrated qwk: pad {rp['qwk']['mean']:.3f}  joint {rj['qwk']['mean']:.3f}", flush=True)
         del model
     (out / "results.json").write_text(json.dumps(results, indent=2))
 
