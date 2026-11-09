@@ -84,9 +84,63 @@ The demo runs **model A** (224 px): it is almost as good as B and keeps the page
 
 `app/` holds an equivalent Gradio version with Grad-CAM, for running locally (`python app/app.py` with `best.pt` next to it).
 
+## External test: Digital Knee X-ray Images (Gornale & Patravali)
+
+Does the model work on X-rays from another hospital, scanner and set of readers? The models were tested **frozen**, without retraining, on the Digital Knee X-ray Images dataset (Gornale & Patravali, Mendeley Data 2020, CC BY 4.0): radiographs from hospitals in India (PROTEC PRS 500E), graded by two experts.
+
+**The protocol was fixed and committed before any prediction was made.** It is written at the top of `src/osteoclass/external.py`.
+
+**Audit first.** The dataset needed cleaning before it could be used as a test set:
+
+| Check | Result |
+|---|---|
+| Files | 1,650 per expert; both folders hold the **same images** |
+| Agreement between the two experts | 99.3% exact, QWK 0.998: in practice **one set of labels** (independent radiologists reach kappa ≈ 0.6–0.9) |
+| Exact copies | 71, leaving 1,579 unique images |
+| Near-duplicates | The same knee with another exposure or contrast: **1,377 distinct knees** at most |
+| Same knee, different grades | 9 groups |
+| Bilateral images, one grade for both knees | 109 |
+
+The near-duplicates likely explain the near-perfect accuracy reported with cross-validation on this dataset: the same knee falls in both training and test folds, the same kind of leakage that v1 had.
+
+**Main analysis:** 1,251 single knees (KL0 343, KL1 394, KL2 164, KL3 148, KL4 202), expert I labels, one image per knee, padded to a square. 95% CIs from 1,000 bootstrap resamples of knees.
+
+| Model | QWK | Accuracy | MAE | AUC (KL ≥ 2) |
+|---|---|---|---|---|
+| Baseline (CE, 224 px) | 0.371 | 23.3% | 1.28 | 0.871 |
+| A (SORD + TTA, 224 px) | 0.292 | 21.3% | 1.42 | 0.882 |
+| **B (SORD + TTA, 288 px)** | **0.372** (0.341–0.401) | **24.9%** (22.5–27.3%) | **1.31** | **0.873** (0.853–0.892) |
+| *B on the Chen test set* | *0.867* | *70.4%* | *0.33* | *0.955* |
+
+**The models do not transfer as they are.** They keep the order of the grades (AUC ≈ 0.87, Spearman 0.75) but grade almost every knee about two grades too high: the mean expected grade for KL0 knees is 2.0, and for KL4 knees 3.6. With KL ≥ 2 as the threshold, sensitivity is 99% and specificity 10%. Secondary analyses, also declared in advance: stretching the image instead of padding it gives QWK 0.57–0.66, and bilateral images 0.21–0.32.
+
+**Why: exploratory analyses, added after seeing the results** and reported apart from the main ones (`--exploratory`):
+
+- *Scale.* The Gornale crops are much wider than the Chen crops, so a padded knee is about half the size the model was trained on, and the joint space looks narrower. A square crop centered on the joint, with the field of view of the Chen crops (located from intensity profiles, no training), raises B from QWK 0.372 to **0.550** (0.516–0.581). The over-grading shrinks but remains (accuracy 29.7%).
+- *Calibration.* Fitting the four expected-grade cut points on half of the knees and scoring the other half (20 random splits, both directions) gives B QWK **0.756** (0.730–0.781) with padding and **0.785** (0.749–0.810) with the joint crop, accuracy 51% and 3-class accuracy 72%. This uses labeled knees from the new site, so it is a result *with local adaptation*, not an external result.
+
+| B, Gornale | Kind | QWK | Accuracy |
+|---|---|---|---|
+| Padded | **Main** | 0.372 | 24.9% |
+| Stretched | Sensitivity, pre-declared | 0.626 | 33.6% |
+| Joint-centered crop | Exploratory | 0.550 | 29.7% |
+| Padded + recalibration | Exploratory, local adaptation | 0.756 | 50.6% |
+| Joint crop + recalibration | Exploratory, local adaptation | 0.785 | 50.8% |
+
+**What this means:**
+- A model that scores QWK 0.87 on its own test set can fall to 0.37 at another site. The internal number says nothing about deployment.
+- Most of the drop is a **shift in scale**, not a loss of ranking: part comes from how the knee is cropped, part is a calibration offset that a few hundred labeled local knees correct.
+- Even after both fixes, B stays below its internal performance (0.79 vs 0.87). That remaining gap may come from the images (scanner, processing) or from the readers grading differently from the OAI readers; this dataset cannot separate the two.
+- Gornale has now been examined in detail, so it can no longer serve as an unbiased test for decisions taken because of it. Any robustness change will be confirmed on another source.
+
+Run: `notebooks/06_externa_gornale.ipynb` (`python -m osteoclass.external --root <...> --runs <run folders> [--exploratory]`).
+
 ## Next
 
-1. External validation on another cohort (for example MOST) to check how the model generalizes beyond the OAI.
+1. A knee-joint detector so that every image is cropped at the same scale as in training, whatever the source.
+2. Scale and contrast augmentation during training, to make the model less sensitive to how the image was acquired.
+3. A local calibration step (cut points fitted on a small labeled sample) as part of deploying at a new site.
+4. External validation on a cohort not used for any decision (MOST), with access requested through the NIA AgingResearchBiobank.
 
 ## How to run
 
@@ -99,5 +153,7 @@ Locally: `pip install -e .` then `python -m osteoclass.data ...` and `python -m 
 Chen P, Gao L, Shi X, Allen K, Yang L. Fully automatic knee osteoarthritis severity grading using deep neural networks with a novel ordinal loss. *Computerized Medical Imaging and Graphics* 75 (2019) 84–92. doi:10.1016/j.compmedimag.2019.06.002
 
 Díaz R, Marathe A. Soft labels for ordinal regression. *CVPR* 2019, 4738–4747.
+
+Gornale SS, Patravali PU. Digital Knee X-ray Images. *Mendeley Data* V1 (2020). doi:10.17632/t9ndx37v5h.1
 
 Tiulpin A, Thevenot J, Rahtu E, Lehenkari P, Saarakkala S. Automatic knee osteoarthritis diagnosis from plain radiographs: a deep learning-based approach. *Scientific Reports* 8 (2018) 1727. doi:10.1038/s41598-018-20132-7
