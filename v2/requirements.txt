@@ -8,3 +8,4 @@ timm
 kagglehub
 matplotlib
 pytest
+imagehash
