@@ -37,7 +37,7 @@ def test_train_smoke(tmp_path):
 
     main(["--root", str(tmp_path), "--splits", str(tmp_path / "splits.csv"), "--model", "resnet18",
           "--no-pretrained", "--size", "64", "--epochs", "1", "--batch", "8", "--workers", "0",
-          "--bootstrap", "20", "--loss", "sord", "--tta", "--out", str(tmp_path / "run2")])
+          "--bootstrap", "20", "--loss", "sord", "--tta", "--aug", "robust", "--out", str(tmp_path / "run2")])
     assert (tmp_path / "run2" / "results.json").exists()
 
 
@@ -53,3 +53,16 @@ def test_sord_and_cuts():
     y = np.array([0, 1, 2, 3, 4] * 4)
     p = np.eye(5)[y] * 0.8 + 0.04
     assert (decode(p, tune_cuts(y, p, iters=1)) == y).all()
+
+
+def test_robust_transforms():
+    import torch
+    from osteoclass.dataset import RandomBands, build_transforms
+    img = Image.fromarray(np.full((80, 120), 128, np.uint8))
+    for _ in range(20):
+        x = build_transforms(64, train=True, aug="robust")(img)
+        assert x.shape == (3, 64, 64) and torch.isfinite(x).all()
+    band = RandomBands(0.5, p=1.0)(torch.full((3, 40, 40), 200, dtype=torch.uint8))
+    rows = band[0].amax(1)
+    assert (rows == 0).any() and (rows == 200).sum() >= 20
+

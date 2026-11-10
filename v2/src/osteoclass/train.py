@@ -81,6 +81,8 @@ def main(argv=None) -> None:
     ap.add_argument("--loss", choices=["ce", "sord"], default="ce")
     ap.add_argument("--sord-alpha", type=float, default=2.0)
     ap.add_argument("--tta", action="store_true", help="average with the horizontally flipped image")
+    ap.add_argument("--aug", choices=["base", "robust"], default="base",
+                    help="'robust': wider zoom, black bands, gamma, contrast, sharpness and blur")
     ap.add_argument("--out", default="outputs/runs/run")
     args = ap.parse_args(argv)
 
@@ -95,7 +97,7 @@ def main(argv=None) -> None:
     if args.limit:
         parts = {s: d.sample(min(args.limit, len(d)), random_state=0) for s, d in parts.items()}
 
-    tf_train = build_transforms(args.size, train=True)
+    tf_train = build_transforms(args.size, train=True, aug=args.aug)
     tf_eval = build_transforms(args.size, train=False)
     ds = {s: KneeDataset(d, args.root, "kl5", tf_train if s == "train" else tf_eval) for s, d in parts.items()}
     dl = {s: DataLoader(ds[s], batch_size=args.batch, shuffle=(s == "train"), num_workers=args.workers,
