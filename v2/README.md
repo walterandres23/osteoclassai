@@ -80,7 +80,7 @@ On one correctly classified test knee per grade, the heat maps sit on the **tibi
 
 <p align="center"><img src="media/demo_web.png" width="760" alt="In-browser demo grading a KL4 knee"></p>
 
-The demo runs **model A** (224 px): it is almost as good as B and keeps the page fast. Like the evaluation, it averages the image and its mirror. The model is exported to ONNX (`osteoclass.export_onnx`) with two outputs: the logits and a class activation map (the classifier applied at every location of the last feature map, so no gradients are needed). Weights are stored as int8 per output channel and dequantized on load: 111 MB → 28 MB, with **99% agreement** with the float model on 300 test images. The page (`web/index.html`) runs it with ONNX Runtime Web in about 4 s on a laptop CPU (two passes, image and mirror), and the X-ray never leaves the device. Hosted as a free static Hugging Face Space (`notebooks/04_publicar_demo.ipynb`).
+The demo runs **model D** (224 px, robustness augmentation, see Improvement 2): as good as B on the Chen test set, much less sensitive to other scanners and crops, and fast in the browser. Like the evaluation, it averages the image and its mirror. The model is exported to ONNX (`osteoclass.export_onnx`) with two outputs: the logits and a class activation map (the classifier applied at every location of the last feature map, so no gradients are needed). Weights are stored as int8 per output channel and dequantized on load: 111 MB → 28 MB, with **99% agreement** with the float model on 300 test images. The page (`web/index.html`) runs it with ONNX Runtime Web in about 4 s on a laptop CPU (two passes, image and mirror), and the X-ray never leaves the device. Hosted as a free static Hugging Face Space (`notebooks/04_publicar_demo.ipynb`).
 
 `app/` holds an equivalent Gradio version with Grad-CAM, for running locally (`python app/app.py` with `best.pt` next to it).
 
@@ -159,17 +159,27 @@ B also wins on validation (QWK with cut points 0.859 vs 0.856), so **B remains t
 | Joint-centered crop (exploratory) | 0.550 | **0.655** |
 | Recalibrated, padded (exploratory) | 0.756 | **0.820** |
 
+**At 224 px the augmentation costs nothing on the source.** Run **D** is A's recipe (SORD + TTA, 224 px) with `--aug robust`:
+
+| Chen test set | A | D (robust) | D − A (95% CI) |
+|---|---|---|---|
+| QWK | 0.859 | **0.867** | +0.008 (−0.002 to +0.020) |
+| Accuracy | 70.1% | 70.2% | +0.1 pp (−1.7 to +1.8) |
+| MAE | 0.334 | 0.324 | −0.010 (−0.029 to +0.009) |
+| AUC (KL ≥ 2) | 0.951 | 0.950 | −0.001 (−0.005 to +0.004) |
+
+On Gornale, D goes from A's 0.292 to **0.570** (0.536–0.601), AUC 0.907, and 0.823 after recalibration. D also matches B on the Chen test set (QWK difference +0.000, −0.010 to +0.011), but B is still slightly ahead on validation (0.859 vs 0.855), so the rule keeps B as the reference. Why the cost appears at 288 px (C) and not at 224 px (D) is not clear from two runs; it may be run-to-run variation.
+
 **Reading:** the augmentation almost doubles the uncalibrated agreement at the other site and lifts it to 0.82 with local recalibration, at the cost of about one hundredth of QWK and 3.6 points of accuracy on the source test set. That is the usual trade-off between fitting one source and generalizing to others. B stays as the benchmark model; a robust model is the better choice for the public demo, where users upload X-rays from any scanner and with any crop.
 
-Run: `notebooks/07_robustez.ipynb` (`python -m osteoclass.train ... --loss sord --tta --size 288 --aug robust`).
+Run: `notebooks/07_robustez.ipynb` (C) and `notebooks/08_demo_robusta.ipynb` (D), with `python -m osteoclass.train ... --loss sord --tta --aug robust [--size 288]`.
 
 ## Next
 
-1. A robust model at 224 px for the demo, so that the page stays fast.
-2. Higher resolution (384 px) with robust augmentation, to see whether it recovers the accuracy lost on the Chen test set.
-3. A knee-joint detector so that every image is cropped at the same scale as in training, whatever the source.
-4. A local calibration step (cut points fitted on a small labeled sample) as part of deploying at a new site.
-5. External validation on a cohort not used for any decision (MOST), with access requested through the NIA AgingResearchBiobank.
+1. Higher resolution (384 px) with robust augmentation.
+2. A knee-joint detector so that every image is cropped at the same scale as in training, whatever the source.
+3. A local calibration step (cut points fitted on a small labeled sample) as part of deploying at a new site.
+4. External validation on a cohort not used for any decision (MOST), with access requested through the NIA AgingResearchBiobank.
 
 ## How to run
 
