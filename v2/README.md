@@ -95,7 +95,7 @@ Does the model work on X-rays from another hospital, scanner and set of readers?
 | Check | Result |
 |---|---|
 | Files | 1,650 per expert; both folders hold the **same images** |
-| Agreement between the two experts | 99.3% exact, QWK 0.998: in practice **one set of labels** (independent radiologists reach kappa ≈ 0.6–0.9) |
+| Agreement between the two experts | 99.3% exact, QWK 0.998: in practice **one set of labels** (independent radiologists reach kappa ≈ 0.56–0.89) |
 | Exact copies | 71, leaving 1,579 unique images |
 | Near-duplicates | The same knee with another exposure or contrast: **1,377 distinct knees** at most |
 | Same knee, different grades | 9 groups |
@@ -117,7 +117,7 @@ The near-duplicates likely explain the near-perfect accuracy reported with cross
 **Why: exploratory analyses, added after seeing the results** and reported apart from the main ones (`--exploratory`):
 
 - *Scale.* The Gornale crops are much wider than the Chen crops, so a padded knee is about half the size the model was trained on, and the joint space looks narrower. A square crop centered on the joint, with the field of view of the Chen crops (located from intensity profiles, no training), raises B from QWK 0.372 to **0.550** (0.516–0.581). The over-grading shrinks but remains (accuracy 29.7%).
-- *Calibration.* Fitting the four expected-grade cut points on half of the knees and scoring the other half (20 random splits, both directions) gives B QWK **0.756** (0.730–0.781) with padding and **0.785** (0.749–0.810) with the joint crop, accuracy 51% and 3-class accuracy 72%. This uses labeled knees from the new site, so it is a result *with local adaptation*, not an external result.
+- *Calibration.* Fitting the four expected-grade cut points on half of the knees and scoring the other half (20 random splits, both directions) gives B QWK **0.756** (0.730–0.781) with padding and **0.785** (0.749–0.810) with the joint crop (accuracy 51%, 3-class accuracy 72%). This uses labeled knees from the new site, so it is a result *with local adaptation*, not an external result.
 
 | B, Gornale | Kind | QWK | Accuracy |
 |---|---|---|---|
@@ -135,12 +135,41 @@ The near-duplicates likely explain the near-perfect accuracy reported with cross
 
 Run: `notebooks/06_externa_gornale.ipynb` (`python -m osteoclass.external --root <...> --runs <run folders> [--exploratory]`).
 
+## Improvement 2: robustness augmentation
+
+The external test showed that the model depends on the scale of the knee and on how the image was processed. Run **C** keeps B's recipe (SORD + TTA, 288 px) and adds `--aug robust`: zoom out to 0.6× with black borders and in to 1.15×, blank top/bottom bands (25% of images), wider brightness/contrast, gamma 0.7–1.4, sharpening and blur. Model selection and the single test evaluation follow the same rules as before.
+
+**Chen test set** (1,656 knees). Differences from a paired bootstrap over patients (2,000 resamples):
+
+| | B | C (robust) | C − B (95% CI) |
+|---|---|---|---|
+| QWK | **0.867** | 0.854 | −0.013 (−0.025 to −0.000) |
+| Accuracy | **70.4%** | 66.8% | −3.6 pp (−5.7 to −1.5) |
+| MAE | **0.327** | 0.356 | +0.029 (+0.005 to +0.052) |
+| AUC (KL ≥ 2) | **0.955** | 0.945 | −0.009 (−0.015 to −0.003) |
+
+B also wins on validation (QWK with cut points 0.859 vs 0.856), so **B remains the reference model**.
+
+**Gornale.** This is no longer an unbiased test, because the augmentation was designed after looking at it. It shows the direction of the change, not a proof of generalization:
+
+| | B | C (robust) |
+|---|---|---|
+| QWK, main analysis (padded) | 0.372 | **0.614** (0.583–0.642) |
+| AUC (KL ≥ 2) | 0.873 | **0.911** |
+| Joint-centered crop (exploratory) | 0.550 | **0.655** |
+| Recalibrated, padded (exploratory) | 0.756 | **0.820** |
+
+**Reading:** the augmentation almost doubles the uncalibrated agreement at the other site and lifts it to 0.82 with local recalibration, at the cost of about one hundredth of QWK and 3.6 points of accuracy on the source test set. That is the usual trade-off between fitting one source and generalizing to others. B stays as the benchmark model; a robust model is the better choice for the public demo, where users upload X-rays from any scanner and with any crop.
+
+Run: `notebooks/07_robustez.ipynb` (`python -m osteoclass.train ... --loss sord --tta --size 288 --aug robust`).
+
 ## Next
 
-1. A knee-joint detector so that every image is cropped at the same scale as in training, whatever the source.
-2. Scale and contrast augmentation during training, to make the model less sensitive to how the image was acquired.
-3. A local calibration step (cut points fitted on a small labeled sample) as part of deploying at a new site.
-4. External validation on a cohort not used for any decision (MOST), with access requested through the NIA AgingResearchBiobank.
+1. A robust model at 224 px for the demo, so that the page stays fast.
+2. Higher resolution (384 px) with robust augmentation, to see whether it recovers the accuracy lost on the Chen test set.
+3. A knee-joint detector so that every image is cropped at the same scale as in training, whatever the source.
+4. A local calibration step (cut points fitted on a small labeled sample) as part of deploying at a new site.
+5. External validation on a cohort not used for any decision (MOST), with access requested through the NIA AgingResearchBiobank.
 
 ## How to run
 
