@@ -174,12 +174,31 @@ On Gornale, D goes from A's 0.292 to **0.570** (0.536–0.601), AUC 0.907, and 0
 
 Run: `notebooks/07_robustez.ipynb` (C) and `notebooks/08_demo_robusta.ipynb` (D), with `python -m osteoclass.train ... --loss sord --tta --aug robust [--size 288]`.
 
+## Improvement 3: ensemble of the trained runs
+
+Higher resolution was dropped: the Chen images are 224 × 224, so 384 px would only enlarge existing pixels (288 px barely helped, B vs A). Instead, the four runs are combined by averaging the class probabilities each one already saved, with no new training (`osteoclass.ensemble`). The protocol was fixed before looking at the test set: every combination of two or more runs, equal weights, expected-grade cut points fitted on validation, the ensemble with the best validation QWK selected (ties to the smaller one), and the test set evaluated once for the selected ensemble and for all four runs (pre-declared sensitivity analysis).
+
+Validation selected **B + C + D** (QWK 0.867). **Chen test set** (1,656 knees), all with validation-fitted cut points; differences from a paired bootstrap over patients (2,000 resamples):
+
+| | B | B + C + D (selected) | All four |
+|---|---|---|---|
+| QWK | 0.866 | 0.871 | **0.874** |
+| Accuracy | 67.9% | 69.4% | **70.2%** |
+| MAE | 0.346 | 0.323 | **0.316** |
+| AUC (KL ≥ 2) | 0.955 | 0.954 | 0.955 |
+| QWK − B (95% CI) | | +0.005 (−0.004 to +0.014) | +0.008 (−0.001 to +0.016) |
+| Accuracy − B | | +1.5 pp (−0.3 to +3.4) | +2.3 pp (+0.5 to +4.1) |
+| MAE − B | | −0.023 (−0.042 to −0.004) | −0.030 (−0.049 to −0.010) |
+
+**Reading:** the ensemble makes smaller errors (MAE improves clearly in both versions) but the QWK gain, under one hundredth, is within the noise. The internal ceiling of this recipe on this dataset appears to be near QWK 0.87; further gains on the source are small compared with the external drop (0.87 → 0.57 for D). B stays as the single reference model, the ensemble is reported as the best internal result, and the demo keeps D alone: three models would triple the time in the browser (about 4 s → 12 s) for a gain that is not significant.
+
+Run: `notebooks/09_ensamble.ipynb` (CPU; `python -m osteoclass.ensemble --runs <B> <A> <C> <D> --names B A C D`).
+
 ## Next
 
-1. Higher resolution (384 px) with robust augmentation.
-2. A knee-joint detector so that every image is cropped at the same scale as in training, whatever the source.
-3. A local calibration step (cut points fitted on a small labeled sample) as part of deploying at a new site.
-4. External validation on a cohort not used for any decision (MOST), with access requested through the NIA AgingResearchBiobank.
+1. A knee-joint detector so that every image is cropped at the same scale as in training, whatever the source.
+2. A local calibration step (cut points fitted on a small labeled sample) as part of deploying at a new site.
+3. External validation on a cohort not used for any decision (MOST), with access requested through the NIA AgingResearchBiobank.
 
 ## How to run
 
