@@ -194,10 +194,41 @@ Validation selected **B + C + D** (QWK 0.867). **Chen test set** (1,656 knees), 
 
 Run: `notebooks/09_ensamble.ipynb` (CPU; `python -m osteoclass.ensemble --runs <B> <A> <C> <D> --names B A C D`).
 
+## Improvement 4: knee-joint detector
+
+The external test showed that the main problem on a new source is **scale**: the classifiers were trained on crops of a fixed field of view, and an image prepared any other way is graded higher. A detector now finds each knee and crops it at that same field of view.
+
+**Data.** Chen et al. also published the data behind their own detector (KneeXrayData, doi:10.17632/56rmx5bjcr.1, CC BY 4.0): 4,130 full bilateral OAI radiographs (256 × 320) with a box per knee, in **the same patient split** as the KL crops (2,889 / 413 / 828), so training on its train part does not touch our test set. Matching every KneeKL224 crop back into its radiograph (400 knees, median correlation 0.985) gives the crop rule: **a square of 1.30 × the box width, centered on the box** (80% of knees between 1.27 and 1.34; center offset under 1%); no mirroring; the right knee is on the left of the image (`osteoclass.detdata`).
+
+**Detector** (`osteoclass.detect`): a small CenterNet on ResNet-18 that predicts, at stride 4, a heatmap of knee centers, their sub-pixel offset and the box width. Training adds single-knee views with the joint larger in the frame, zoom, mirroring, contrast, gamma, blur and noise, so that it also works on other sources. 40 epochs (~12 min on a T4), best epoch by the crop IoU on validation, test evaluated once:
+
+| DetKneeData test (828 radiographs, 1,656 knees) | |
+|---|---|
+| Knees found | **100%**, no extra detections |
+| IoU of the crop given to the classifier, mean | **0.916** |
+| Crops with IoU ≥ 0.8 | 98.9% |
+| Center error, median (fraction of box width) | 3.1% |
+| Width error, median | 2.4% |
+
+**On Gornale** (exploratory: this dataset had already informed earlier decisions; the detector never saw it). Frozen classifiers; same protocol, metrics and bootstrap as the external test. The detector found a knee in all 1,251 single-knee images and both knees in 101 of 109 bilateral ones.
+
+| QWK on Gornale (95% CI) | B | D |
+|---|---|---|
+| Padded to square (main analysis) | 0.372 (0.341–0.401) | 0.570 (0.536–0.601) |
+| Joint crop by hand-made rule | 0.550 (0.516–0.581) | 0.599 (0.566–0.628) |
+| **Detector crop** | **0.652** (0.621–0.679) | **0.645** (0.615–0.671) |
+| AUC KL ≥ 2, detector crop | 0.898 | **0.917** |
+| Bilateral images: padded halves → detector | 0.279 → 0.437 | 0.443 → 0.514 |
+| Split-half recalibrated, detector crop | 0.802 | 0.809 |
+
+**Reading:** cropping at the training scale is worth +0.28 QWK for B, more than the robustness augmentation (+0.20), and with the right crop B and D perform the same: most of what the augmentation bought was tolerance to the wrong scale. What the detector does not fix is the grade calibration: accuracy stays near 35% because both models still grade higher than these experts; with cut points fitted on half of the knees every crop reaches about 0.80. Scale and calibration are separate problems and a deployment needs both.
+
+Run: `notebooks/10_detector_datos.ipynb` (data and crop rule, CPU), `notebooks/11_detector_entrenamiento.ipynb` (training, T4), `notebooks/12_detector_gornale.ipynb` (Gornale, T4).
+
 ## Next
 
-1. A knee-joint detector so that every image is cropped at the same scale as in training, whatever the source.
-2. A local calibration step (cut points fitted on a small labeled sample) as part of deploying at a new site.
+1. Put the detector in the web demo (ONNX), before the classifier, showing the detected box, so that full radiographs can be graded.
+2. A local calibration step (cut points fitted on a small labeled sample) as part of deploying at a new site, with an estimate of how many knees it needs.
 3. External validation on a cohort not used for any decision (MOST), with access requested through the NIA AgingResearchBiobank.
 
 ## How to run
@@ -211,6 +242,8 @@ Locally: `pip install -e .` then `python -m osteoclass.data ...` and `python -m 
 Chen P, Gao L, Shi X, Allen K, Yang L. Fully automatic knee osteoarthritis severity grading using deep neural networks with a novel ordinal loss. *Computerized Medical Imaging and Graphics* 75 (2019) 84–92. doi:10.1016/j.compmedimag.2019.06.002
 
 Díaz R, Marathe A. Soft labels for ordinal regression. *CVPR* 2019, 4738–4747.
+
+Chen P. Knee Osteoarthritis Severity Grading Dataset. *Mendeley Data* V1 (2018). doi:10.17632/56rmx5bjcr.1
 
 Gornale SS, Patravali PU. Digital Knee X-ray Images. *Mendeley Data* V1 (2020). doi:10.17632/t9ndx37v5h.1
 
