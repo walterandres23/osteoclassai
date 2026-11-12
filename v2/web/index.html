@@ -34,30 +34,37 @@
   .status { font-size:.85rem; color: var(--ink2); min-height: 1.2em; }
   .warn { background:#fff7e6; border:1px solid #f3dfb3; color: var(--warn); border-radius: 10px; padding: 10px 14px; font-size:.85rem; margin-top: 20px; }
   a { color: var(--blue); }
+  #overview { max-width: 100%; aspect-ratio: auto; width: auto; max-height: 220px; margin-top: 12px; display:none; }
+  .knees { margin-top: 8px; }
+  .knees button { border:1px solid var(--line); background:#fff; border-radius: 8px; padding: 4px 10px; cursor:pointer; font: inherit; font-size:.85rem; }
+  .knees button.on { border-color: var(--blue); color: var(--blue); font-weight: 600; }
 </style>
 </head>
 <body>
 <main>
   <h1>OsteoClassAI · Knee osteoarthritis grading</h1>
   <p class="sub">Kellgren-Lawrence grade from a knee X-ray, computed <strong>entirely in your browser</strong>: the image never leaves your device.
-  ConvNeXt-Tiny with an ordinal loss and robustness augmentation, patient-disjoint test set: QWK 0.867, AUC 0.950 for KL ≥ 2.
+  A detector finds each knee and crops it at the scale the classifier was trained on; then ConvNeXt-Tiny (ordinal loss, robustness augmentation) grades it.
+  Patient-disjoint test set: QWK 0.867, AUC 0.950 for KL ≥ 2.
   <a href="https://github.com/walterandres23/osteoclassai">Code and evaluation</a></p>
 
   <div class="grid">
     <section class="card">
       <label class="drop" id="drop" for="file">
         <strong>Drop a knee X-ray here</strong> or click to choose<br>
-        <span class="muted">Posteroanterior view cropped to the joint, like the OAI images</span>
+        <span class="muted">Posteroanterior view: a full radiograph with one or both knees, or a crop of the joint</span>
       </label>
       <input type="file" id="file" accept="image/*" hidden>
-      <p class="muted" style="margin:14px 0 6px">Or try an example from the test set:</p>
+      <p class="muted" style="margin:14px 0 6px">Or try an example (test-set crops, and two radiographs from another hospital):</p>
       <div class="row examples" id="examples"></div>
-      <p class="status" id="status">Loading model…</p>
+      <p class="status" id="status">Loading models…</p>
+      <canvas id="overview"></canvas>
+      <div class="row knees" id="knees"></div>
     </section>
 
     <section class="card">
       <div class="pair">
-        <figure><canvas id="cvImg" width="224" height="224"></canvas><figcaption>Input (224 × 224)</figcaption></figure>
+        <figure><canvas id="cvImg" width="224" height="224"></canvas><figcaption id="cropCaption">Input to the classifier (224 × 224)</figcaption></figure>
         <figure><canvas id="cvCam" width="224" height="224"></canvas><figcaption>Class activation map</figcaption></figure>
       </div>
       <div id="result" style="margin-top:14px">
@@ -67,13 +74,17 @@
   </div>
 
   <div class="warn">⚠️ Research and educational demo. <strong>Not a medical device</strong>; it must not be used for diagnosis.
-  Example images: Chen P., <em>Knee Osteoarthritis Severity Grading Dataset</em>, Mendeley Data, 2018, doi:10.17632/56rmx5bjcr.1 (from the Osteoarthritis Initiative).</div>
+  Example images: Chen P., <em>Knee Osteoarthritis Severity Grading Dataset</em>, Mendeley Data, 2018, doi:10.17632/56rmx5bjcr.1 (from the Osteoarthritis Initiative);
+  Gornale S. S., Patravali P. U., <em>Digital Knee X-ray Images</em>, Mendeley Data, 2020, doi:10.17632/t9ndx37v5h.1 (CC BY 4.0).
+  On images from another hospital the grade tends to be higher than the local experts': see the external test in the repository.</div>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
 <script>
 const MODEL_URL = "model_int8.onnx";
+const DET_URL = "detector_int8.onnx";
 const SIZE = 224;
+const DET_H = 256, DET_W = 320, STRIDE = 4, CROP = 1.30, DET_THR = 0.3;   // as in osteoclass.detect
 const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225];
 const GRADES = [
   "KL0 · No osteoarthritis",
@@ -82,10 +93,11 @@ const GRADES = [
   "KL3 · Moderate",
   "KL4 · Severe",
 ];
-const EXAMPLES = [["examples/kl0_9921260L.png", "KL0"], ["examples/kl2_9999862R.png", "KL2"], ["examples/kl4_9688649L.png", "KL4"]];
+const EXAMPLES = [["examples/kl0_9921260L.png", "KL0"], ["examples/kl2_9999862R.png", "KL2"], ["examples/kl4_9688649L.png", "KL4"],
+                  ["examples/gornale_single.png", "Full, 1 knee"], ["examples/gornale_bilateral.png", "Full, 2 knees"]];
 
 const $ = (id) => document.getElementById(id);
-let session = null;
+let session = null, detSession = null, results = [];
 
 ort.env.wasm.numThreads = 1;   // static hosting has no cross-origin isolation
 
@@ -96,12 +108,13 @@ async function init() {
     b.onclick = () => runFromUrl(src);
     $("examples").appendChild(b);
   }
-  try {
-    session = await ort.InferenceSession.create(MODEL_URL, { executionProviders: ["wasm"] });
-    $("status").textContent = "Model ready.";
-  } catch (e) {
-    $("status").textContent = "Could not load the model: " + e.message;
-  }
+  const [cls, det] = await Promise.allSettled([
+    ort.InferenceSession.create(MODEL_URL, { executionProviders: ["wasm"] }),
+    ort.InferenceSession.create(DET_URL, { executionProviders: ["wasm"] })]);
+  if (cls.status === "fulfilled") session = cls.value;
+  if (det.status === "fulfilled") detSession = det.value;
+  $("status").textContent = !session ? "Could not load the model: " + cls.reason.message
+    : detSession ? "Models ready." : "Model ready (the knee detector did not load: images are used as they are).";
 }
 
 function loadImage(src) {
@@ -133,6 +146,62 @@ function toTensor(img) {
            tensorFlip: new ort.Tensor("float32", flip, [1, 3, SIZE, SIZE]), gray };
 }
 
+function grayOf(px, i) { return (0.299 * px[4 * i] + 0.587 * px[4 * i + 1] + 0.114 * px[4 * i + 2]) / 255; }
+
+async function detect(img) {
+  // letterbox to 320 x 256, as osteoclass.detect.letterbox
+  const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+  const s = Math.min(DET_H / h, DET_W / w), nw = Math.max(1, Math.round(w * s)), nh = Math.max(1, Math.round(h * s));
+  const px = Math.floor((DET_W - nw) / 2), py = Math.floor((DET_H - nh) / 2);
+  const c = document.createElement("canvas"); c.width = DET_W; c.height = DET_H;
+  const ctx = c.getContext("2d"); ctx.fillStyle = "#000"; ctx.fillRect(0, 0, DET_W, DET_H);
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high"; ctx.drawImage(img, px, py, nw, nh);
+  const d = ctx.getImageData(0, 0, DET_W, DET_H).data, n = DET_W * DET_H, x = new Float32Array(3 * n);
+  for (let i = 0; i < n; i++) { const v = (grayOf(d, i) - 0.5) / 0.25; x[i] = v; x[n + i] = v; x[2 * n + i] = v; }
+  const out = (await detSession.run({ image: new ort.Tensor("float32", x, [1, 3, DET_H, DET_W]) })).det;
+  const [, , H, W] = out.dims, o = out.data, hw = H * W, peaks = [];
+  for (let iy = 0; iy < H; iy++) for (let ix = 0; ix < W; ix++) {
+    const v = o[iy * W + ix]; if (v < DET_THR) continue;
+    let top = true;
+    for (let dy = -1; dy <= 1 && top; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const yy = iy + dy, xx = ix + dx;
+      if (yy >= 0 && yy < H && xx >= 0 && xx < W && o[yy * W + xx] > v) { top = false; break; }
+    }
+    if (top) peaks.push([v, iy, ix]);
+  }
+  return peaks.sort((a, b) => b[0] - a[0]).slice(0, 2).map(([v, iy, ix]) => {
+    const i = iy * W + ix;
+    return { score: v, cx: ((ix + o[hw + i]) * STRIDE - px) / s, cy: ((iy + o[2 * hw + i]) * STRIDE - py) / s,
+             w: Math.exp(o[3 * hw + i]) * STRIDE / s };
+  }).sort((a, b) => a.cx - b.cx);
+}
+
+function cropKnee(img, k) {
+  // square of CROP x box width centered on the knee, black outside the image, at 224 x 224
+  const side = CROP * k.w, sc = SIZE / side;
+  const c = document.createElement("canvas"); c.width = SIZE; c.height = SIZE;
+  const ctx = c.getContext("2d"); ctx.fillStyle = "#000"; ctx.fillRect(0, 0, SIZE, SIZE);
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+  const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+  ctx.drawImage(img, (side / 2 - k.cx) * sc, (side / 2 - k.cy) * sc, w * sc, h * sc);
+  return c;
+}
+
+function drawOverview(img, knees) {
+  const c = $("overview"), w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+  if (!knees.length) { c.style.display = "none"; return; }
+  const sc = Math.min(1, 640 / w); c.width = Math.round(w * sc); c.height = Math.round(h * sc);
+  const ctx = c.getContext("2d"); ctx.drawImage(img, 0, 0, c.width, c.height);
+  knees.forEach((k, i) => {
+    const side = CROP * k.w;
+    ctx.strokeStyle = i === current ? "#2a78d6" : "#e8a33a"; ctx.lineWidth = 2;
+    ctx.strokeRect((k.cx - side / 2) * sc, (k.cy - side / 2) * sc, side * sc, side * sc);
+  });
+  c.style.display = "block";
+}
+
+let current = 0, lastImg = null, lastKnees = [];
+
 function softmax(a) { const m = Math.max(...a); const e = a.map(v => Math.exp(v - m)); const s = e.reduce((x, y) => x + y); return e.map(v => v / s); }
 
 function jet(t) {   // matplotlib-like jet colormap, t in [0, 1]
@@ -163,7 +232,25 @@ async function run(img) {
   if (!session) { $("status").textContent = "The model is still loading…"; return; }
   $("status").textContent = "Running…";
   const t0 = performance.now();
-  const { tensor, tensorFlip, gray } = toTensor(img);
+  let knees = detSession ? await detect(img) : [];
+  const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+  // an image that is already a crop of the joint: the knee would fill it, so it is used as it is
+  knees = knees.filter(k => CROP * k.w < 0.9 * Math.min(w, h));
+  const inputs = knees.length ? knees.map(k => cropKnee(img, k)) : [img];
+  results = [];
+  for (const src of inputs) results.push(await classify(src));
+  current = 0; lastImg = img; lastKnees = knees;
+  $("knees").innerHTML = knees.length > 1 ? knees.map((k, i) =>
+    `<button data-i="${i}">${i === 0 ? "Knee on the left of the image" : "Knee on the right of the image"} · ${GRADES[results[i].k].split(" ·")[0]}</button>`).join("") : "";
+  document.querySelectorAll("#knees button").forEach(b => b.onclick = () => show(+b.dataset.i));
+  $("cropCaption").textContent = knees.length ? "Knee found by the detector (224 × 224)" : "Input, used as it is (224 × 224)";
+  show(0);
+  const how = !detSession ? "" : knees.length ? ` ${knees.length} knee${knees.length > 1 ? "s" : ""} found.` : " Used as a crop of the joint.";
+  $("status").textContent = `Done in ${Math.round(performance.now() - t0)} ms, on your device.${how}`;
+}
+
+async function classify(src) {
+  const { tensor, tensorFlip, gray } = toTensor(src);
   const out = await session.run({ image: tensor });
   const outF = await session.run({ image: tensorFlip });
   const pa = softmax(Array.from(out.logits.data)), pb = softmax(Array.from(outF.logits.data));
@@ -173,14 +260,24 @@ async function run(img) {
   const cam = new Array(h * w);                              // mirror the second map back, then average
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++)
     cam[y * w + x] = (out.cam.data[k * h * w + y * w + x] + outF.cam.data[k * h * w + y * w + (w - 1 - x)]) / 2;
+  return { probs, k, cam, h, w, gray };
+}
+
+function show(i) {
+  current = i;
+  const { probs, k, cam, h, w, gray } = results[i];
+  const ctx = $("cvImg").getContext("2d"), im = ctx.createImageData(SIZE, SIZE);
+  for (let j = 0; j < SIZE * SIZE; j++) { const v = gray[j] * 255; im.data.set([v, v, v, 255], 4 * j); }
+  ctx.putImageData(im, 0, 0);
   drawCam(gray, cam, h, w);
+  drawOverview(lastImg, lastKnees);
+  document.querySelectorAll("#knees button").forEach(b => b.classList.toggle("on", +b.dataset.i === i));
   const oa = probs[2] + probs[3] + probs[4];
   $("result").innerHTML =
     `<p class="pred">Predicted: ${GRADES[k]}</p>` +
     `<p class="oa">Probability of osteoarthritis (KL ≥ 2): <strong>${(100 * oa).toFixed(0)}%</strong></p>` +
     probs.map((p, i) => `<div class="bar${i === k ? " top" : ""}"><span>${GRADES[i]}</span>` +
       `<div class="track"><div class="fill" style="width:${(100 * p).toFixed(1)}%"></div></div><span>${(100 * p).toFixed(0)}%</span></div>`).join("");
-  $("status").textContent = `Done in ${Math.round(performance.now() - t0)} ms, on your device.`;
 }
 
 const file = $("file"), drop = $("drop");

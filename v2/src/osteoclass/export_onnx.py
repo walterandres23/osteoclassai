@@ -6,6 +6,12 @@ Unlike Grad-CAM it needs no gradients, so it runs in the browser.
 
     python -m osteoclass.export_onnx --ckpt best.pt --out web/model.onnx --quantize \
         --check-root <dataset> --check-pred pred_test.csv
+
+The knee-joint detector (osteoclass.detect) is exported with ``--detector``: input ``image`` (1, 3, 256, 320),
+output ``det`` (1, 4, 64, 80) = center heatmap (after sigmoid), x/y offsets and log(width / 4).
+
+    python -m osteoclass.export_onnx --detector --ckpt runs/detector/best.pt --out web/detector.onnx --quantize \
+        --check-det outputs/det
 """
 from __future__ import annotations
 
@@ -51,6 +57,36 @@ def export(ckpt: str | Path, out: str | Path, opset: int = 17) -> Path:
     torch.onnx.export(wrapper, dummy, out, input_names=["image"], output_names=["logits", "cam"],
                       opset_version=opset, dynamo=False)
     return out
+
+
+def export_detector(ckpt: str | Path, out: str | Path, opset: int = 17) -> Path:
+    from .detect import IN_H, IN_W, build_model
+    ck = torch.load(ckpt, map_location="cpu")
+    model = build_model(ck.get("backbone", "resnet18"), pretrained=False).eval()
+    model.load_state_dict(ck["model"])
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    torch.onnx.export(model, torch.randn(1, 3, IN_H, IN_W), out, input_names=["image"], output_names=["det"],
+                      opset_version=opset, dynamo=False)
+    return out
+
+
+def detector_agreement(onnx_a: Path, onnx_b: Path, images: list[np.ndarray]) -> dict:
+    """Same knees found by both detectors, and the IoU of their crops (gray uint8 images of any size)."""
+    import onnxruntime as ort
+    from .detect import crop_box, decode, iou, letterbox, to_tensor
+    sa = ort.InferenceSession(str(onnx_a), providers=["CPUExecutionProvider"])
+    sb = ort.InferenceSession(str(onnx_b), providers=["CPUExecutionProvider"])
+    same, ious = [], []
+    for g in images:
+        x = to_tensor(letterbox(g)[0])[None].numpy()
+        oa, ob = (sess.run(["det"], {"image": x})[0][0] for sess in (sa, sb))
+        ka, kb = decode(oa[0], oa[1:3], oa[3]), decode(ob[0], ob[1:3], ob[3])
+        same.append(len(ka) == len(kb))
+        for a, b in zip(ka, kb):
+            ious.append(iou(crop_box(a["cx"], a["cy"], a["w"]), crop_box(b["cx"], b["cy"], b["w"])))
+    return {"same_count": float(np.mean(same)), "crop_iou_mean": float(np.mean(ious)) if ious else float("nan"),
+            "crop_iou_min": float(np.min(ious)) if ious else float("nan")}
 
 
 def quantize(src: Path, dst: Path, min_size: int = 4096) -> Path:
@@ -118,7 +154,25 @@ def main(argv=None) -> None:
     ap.add_argument("--check-root", help="dataset root, to compare fp32 vs int8 on test images")
     ap.add_argument("--check-pred", help="pred_test.csv with the image paths")
     ap.add_argument("--check-n", type=int, default=300)
+    ap.add_argument("--detector", action="store_true", help="the checkpoint is the knee-joint detector")
+    ap.add_argument("--check-det", help="DetKneeData folder (index.csv, images/) to compare fp32 vs int8 detectors")
     a = ap.parse_args(argv)
+
+    if a.detector:
+        fp32 = export_detector(a.ckpt, a.out)
+        print(f"fp32: {fp32} ({fp32.stat().st_size / 1e6:.1f} MB)")
+        if not a.quantize:
+            return
+        int8 = quantize(fp32, fp32.with_name(fp32.stem + "_int8.onnx"))
+        print(f"int8: {int8} ({int8.stat().st_size / 1e6:.1f} MB)")
+        if a.check_det:
+            import cv2
+            import pandas as pd
+            idx = pd.read_csv(Path(a.check_det) / "index.csv")
+            paths = idx[idx.split == "test"].image.drop_duplicates().sample(a.check_n, random_state=0)
+            imgs = [cv2.imread(str(Path(a.check_det) / p), cv2.IMREAD_GRAYSCALE) for p in paths]
+            print(f"fp32 vs int8 detector on {len(imgs)} test radiographs: {detector_agreement(fp32, int8, imgs)}")
+        return
 
     fp32 = export(a.ckpt, a.out)
     print(f"fp32: {fp32} ({fp32.stat().st_size / 1e6:.1f} MB)")
