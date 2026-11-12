@@ -22,6 +22,12 @@ joint whose side is the knee width / 0.9, the field of view of the Chen et al. c
 recalibration: expected-grade cut points fitted on half of the knees, scored on the other half
 (20 random splits by cluster, both directions).
 
+Detector analysis (--detector), added later and also exploratory, because this dataset has already informed
+decisions: (c) "detector": the knee found by the joint detector (osteoclass.detect, trained only on Chen's
+DetKneeData, without any image from this dataset) is cropped as a square of 1.30 x the box width, the rule that
+reproduces the Chen crops; for bilateral images the detector looks for both knees in the whole image. Images
+where it finds no knee fall back to the "joint" crop and are counted.
+
 Usage:
     python -m osteoclass.external --root "<...>/Knee X-ray Images" \
         --runs <run_dir> [<run_dir> ...] --out outputs/external/gornale
@@ -89,6 +95,34 @@ def crop_joint(img: Image.Image) -> Image.Image:
     out = Image.new("L", (s, s), 0)
     out.paste(img.convert("L"), (-x, -y))
     return out
+
+
+class KneeDetector:
+    """Wrapper around the trained joint detector: gray PIL image -> square crop(s) at the classifiers' scale."""
+
+    def __init__(self, path: str | Path, device):
+        from .detect import build_model
+        ck = torch.load(path, map_location=device)
+        self.model = build_model(ck.get("backbone", "resnet18"), pretrained=False).to(device).eval()
+        self.model.load_state_dict(ck["model"])
+        self.device = device
+
+    @torch.no_grad()
+    def find(self, img: Image.Image, k: int = 1, thr: float = 0.3) -> list[dict]:
+        from .detect import decode, letterbox, to_original, to_tensor
+        gray = np.asarray(img.convert("L"))
+        lb, s, px, py = letterbox(gray)
+        out = self.model(to_tensor(lb)[None].to(self.device))[0].float().cpu().numpy()
+        return [to_original(d, s, px, py) for d in decode(out[0], out[1:3], out[3], k=k, thr=thr)]
+
+    @staticmethod
+    def crop(img: Image.Image, knee: dict) -> Image.Image:
+        from .detect import crop_box
+        x1, y1, x2, y2 = crop_box(knee["cx"], knee["cy"], knee["w"])
+        side = max(8, int(round(x2 - x1)))
+        out = Image.new("L", (side, side), 0)
+        out.paste(img.convert("L"), (-int(round(x1)), -int(round(y1))))
+        return out
 
 
 def phash(img: Image.Image, size: int = 16) -> np.ndarray:
@@ -195,7 +229,12 @@ def predict_images(model, images: list[Image.Image], size: int, tta: bool, devic
     return np.concatenate(out) if out else np.zeros((0, 5))
 
 
-def prepare(img: Image.Image, mode: str) -> Image.Image:
+def prepare(img: Image.Image, mode: str, detector: "KneeDetector | None" = None, log: list | None = None) -> Image.Image:
+    if mode == "detector":
+        knees = detector.find(img, k=1)
+        if log is not None:
+            log.append(knees[0] if knees else None)
+        return detector.crop(img, knees[0]) if knees else crop_joint(img)
     if mode == "pad":
         return pad_square(img)
     if mode == "joint":
@@ -250,6 +289,7 @@ def main(argv=None) -> None:
     ap.add_argument("--bootstrap", type=int, default=1000)
     ap.add_argument("--exploratory", action="store_true",
                     help="also run the post-hoc analyses: joint-centered crop and split-half recalibration")
+    ap.add_argument("--detector", help="best.pt of osteoclass.detect; adds the exploratory detector-crop analysis")
     args = ap.parse_args(argv)
 
     out = Path(args.out)
@@ -272,16 +312,42 @@ def main(argv=None) -> None:
         halves += [im.crop((0, 0, w // 2, h)), im.crop((w // 2, 0, w, h))]
 
     results = {"protocol": __doc__.split("Usage:")[0].strip(), "audit": summary, "models": {}}
+    detector = KneeDetector(args.detector, device) if args.detector else None
+    det_single, det_bilat = None, None
+    if detector:
+        log = []
+        det_single = [prepare(im, "detector", detector, log) for im in imgs_single]
+        det_bilat = []
+        for p in bilat.path:
+            im = load_gray(root / p)
+            knees = detector.find(im, k=2)
+            w, h = im.size
+            if len(knees) == 2:
+                det_bilat += [detector.crop(im, kn) for kn in knees]
+            else:
+                det_bilat += [crop_joint(im.crop((0, 0, w // 2, h))), crop_joint(im.crop((w // 2, 0, w, h)))]
+            log.append({"bilateral": True, "knees_found": len(knees)})
+        rows = [{"path": p, **(d or {"cx": np.nan})} for p, d in zip(single.path, log[:len(single)])]
+        pd.DataFrame(rows).to_csv(out / "detections_single.csv", index=False)
+        results["detector"] = {"path": str(args.detector),
+                               "single_found": int(sum(d is not None for d in log[:len(single)])),
+                               "single_total": len(single),
+                               "bilateral_both_found": int(sum(d["knees_found"] == 2 for d in log[len(single):])),
+                               "bilateral_total": len(bilat)}
+        print(json.dumps(results["detector"]), flush=True)
     for run in args.runs:
         model, size, tta, name = load_run(run, device)
         r = {"size": size, "tta": tta}
         modes = ("pad", "stretch", "joint") if args.exploratory else ("pad", "stretch")
+        if detector:
+            modes = modes + ("detector",)
         for mode in modes:
-            p = predict_images(model, [prepare(im, mode) for im in imgs_single], size, tta, device)
+            prepared = det_single if mode == "detector" else [prepare(im, mode) for im in imgs_single]
+            p = predict_images(model, prepared, size, tta, device)
             y = single.grade_I.to_numpy()
-            key = f"exploratory_single_{mode}" if mode == "joint" else f"single_{mode}"
+            key = f"exploratory_single_{mode}" if mode in ("joint", "detector") else f"single_{mode}"
             r[key] = evaluate(y, p, single.cluster.to_numpy(), args.bootstrap)
-            if args.exploratory and mode in ("pad", "joint"):
+            if mode == "detector" or (args.exploratory and mode in ("pad", "joint")):
                 r[f"exploratory_recalibrated_{mode}"] = split_half_recalibration(y, p, single.cluster.to_numpy())
             pd.DataFrame({"path": single.path, "cluster": single.cluster, "kl": y,
                           **{f"p{k}": p[:, k] for k in range(5)}}).to_csv(out / f"pred_{name}_{mode}.csv", index=False)
@@ -290,6 +356,11 @@ def main(argv=None) -> None:
             worse = (ph @ np.arange(5)).argmax(1)              # half with the higher expected grade
             pb = ph[np.arange(len(ph)), worse]
             r["bilateral_pad"] = evaluate(bilat.grade_I.to_numpy(), pb, bilat.cluster.to_numpy(), args.bootstrap)
+            if detector:
+                ph = predict_images(model, det_bilat, size, tta, device).reshape(-1, 2, 5)
+                pb = ph[np.arange(len(ph)), (ph @ np.arange(5)).argmax(1)]
+                r["exploratory_bilateral_detector"] = evaluate(bilat.grade_I.to_numpy(), pb,
+                                                               bilat.cluster.to_numpy(), args.bootstrap)
         results["models"][name] = r
         s = r["single_pad"]
         print(f"{name:28s} single/pad  qwk {s['qwk']['value']:.3f} [{s['qwk']['ci_low']:.3f}-{s['qwk']['ci_high']:.3f}]"
@@ -301,6 +372,13 @@ def main(argv=None) -> None:
             print(f"{'':28s} EXPLORATORY joint crop qwk {j['qwk']['value']:.3f} [{j['qwk']['ci_low']:.3f}-"
                   f"{j['qwk']['ci_high']:.3f}]  acc {j['accuracy']['value']:.3f}  auc(KL>=2) {j['oa_auc']['value']:.3f}"
                   f"  | recalibrated qwk: pad {rp['qwk']['mean']:.3f}  joint {rj['qwk']['mean']:.3f}", flush=True)
+        if detector:
+            d, rd = r["exploratory_single_detector"], r["exploratory_recalibrated_detector"]
+            print(f"{'':28s} EXPLORATORY detector crop qwk {d['qwk']['value']:.3f} [{d['qwk']['ci_low']:.3f}-"
+                  f"{d['qwk']['ci_high']:.3f}]  acc {d['accuracy']['value']:.3f}  mae {d['mae_grade']['value']:.3f}"
+                  f"  auc(KL>=2) {d['oa_auc']['value']:.3f}  | recalibrated qwk {rd['qwk']['mean']:.3f}"
+                  + (f"  | bilateral qwk {r['exploratory_bilateral_detector']['qwk']['value']:.3f}"
+                     if "exploratory_bilateral_detector" in r else ""), flush=True)
         del model
     (out / "results.json").write_text(json.dumps(results, indent=2))
 

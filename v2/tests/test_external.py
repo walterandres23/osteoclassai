@@ -83,3 +83,22 @@ def test_external_smoke(tmp_path):
     assert r["tta"] and r["single_pad"]["n"] == 8 and r["bilateral_pad"]["n"] == 2
     assert "qwk" in r["single_stretch"] and (out / "audit.csv").exists()
     assert "qwk" in r["exploratory_single_joint"] and "qwk" in r["exploratory_recalibrated_pad"]
+
+
+def test_external_detector_smoke(tmp_path):
+    from osteoclass.detect import build_model
+    root = tmp_path / "data"
+    _fake_dataset(root)
+    run = tmp_path / "run"
+    run.mkdir()
+    m = timm.create_model("resnet18", pretrained=False, num_classes=5)
+    torch.save({"model": "resnet18", "size": 64, "state_dict": m.state_dict()}, run / "best.pt")
+    det = tmp_path / "det.pt"
+    torch.save({"model": build_model("resnet18", pretrained=False).state_dict(), "backbone": "resnet18"}, det)
+    out = tmp_path / "out"
+    main(["--root", str(root), "--runs", str(run), "--out", str(out), "--bootstrap", "20", "--detector", str(det)])
+    res = json.loads((out / "results.json").read_text())
+    r = res["models"]["run"]
+    assert res["detector"]["single_total"] == 8 and res["detector"]["bilateral_total"] == 2
+    assert "qwk" in r["exploratory_single_detector"] and "qwk" in r["exploratory_recalibrated_detector"]
+    assert r["exploratory_bilateral_detector"]["n"] == 2 and (out / "detections_single.csv").exists()
