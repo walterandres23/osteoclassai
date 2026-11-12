@@ -8,4 +8,5 @@ timm
 kagglehub
 matplotlib
 pytest
-imagehash
+h5py
+opencv-python-headless
