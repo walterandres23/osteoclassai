@@ -241,9 +241,10 @@ async function run(img) {
   let knees = detSession ? await detect(img) : [];
   const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
   // a square image where the knee fills most of the frame is already a crop of the joint: used as it is
-  // (single-knee radiographs are not square, so they still go through the detector)
+  // (the detector underestimates a knee that fills the frame: on the Chen crops its box covers ~70% of the side;
+  // single-knee radiographs are not square, so they still go through the detector)
   const square = Math.abs(w / h - 1) < 0.15;
-  if (square && knees.length && CROP * Math.max(...knees.map(k => k.w)) >= 0.75 * Math.min(w, h)) knees = [];
+  if (square && knees.length && CROP * Math.max(...knees.map(k => k.w)) >= 0.6 * Math.min(w, h)) knees = [];
   const inputs = knees.length ? knees.map(k => cropKnee(img, k)) : [img];
   results = [];
   for (const src of inputs) results.push(await classify(src));
