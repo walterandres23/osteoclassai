@@ -228,10 +228,24 @@ The external test showed that the main problem on a new source is **scale**: the
 
 Run: `notebooks/10_detector_datos.ipynb` (data and crop rule, CPU), `notebooks/11_detector_entrenamiento.ipynb` (training, T4), `notebooks/12_detector_gornale.ipynb` (Gornale, T4).
 
+## Local calibration: how many knees does a new site need?
+
+With the detector the scale is right, but on another hospital both models still grade higher than its experts. The fix is to read the grade from the expected grade with cut points fitted on a few knees graded at the new site (`osteoclass.calibrate`). Learning curve on Gornale with the detector crop (exploratory): for each sample size, 200 random draws of knees, fit on them, score the remaining knees of the site.
+
+<p align="center"><img src="media/calibration_curve.png" width="760" alt="QWK on the rest of the site against the number of knees graded there"></p>
+
+| Median QWK on the rest of the site | 10 knees | 20 | 40 | 80 | 160 | 320 |
+|---|---|---|---|---|---|---|
+| D, uncalibrated | 0.645 | 0.645 | 0.646 | 0.645 | 0.644 | 0.646 |
+| D, shift of the cuts (1 parameter) | 0.714 | 0.719 | 0.728 | 0.735 | 0.737 | 0.740 |
+| **D, 4 cut points** | **0.761** | **0.777** | **0.789** | **0.799** | **0.806** | **0.808** |
+| B, 4 cut points | 0.749 | 0.766 | 0.776 | 0.787 | 0.794 | 0.800 |
+
+**Reading:** moving the four cuts together is not enough, because the bias is not uniform (healthy and doubtful knees are pushed up by about one grade, severe ones slightly down), so four free cut points win at every size, even with 10 knees. With **about 40 graded knees** a site gets most of the gain (+0.14 QWK for D, from 0.65 to 0.79; 10th percentile of the draws 0.76), and from 80 knees on it levels off near 0.80. Deployment: `python -m osteoclass.calibrate --fit --method cuts --pred <site predictions> --out cuts.json` (`notebooks/14_calibracion_local.ipynb`).
+
 ## Next
 
-1. A local calibration step (cut points fitted on a small labeled sample) as part of deploying at a new site, with an estimate of how many knees it needs.
-2. External validation on a cohort not used for any decision (MOST), with access requested through the NIA AgingResearchBiobank.
+1. External validation on a cohort not used for any decision (MOST), with access requested through the NIA AgingResearchBiobank.
 
 ## How to run
 
