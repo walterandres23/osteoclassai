@@ -243,6 +243,21 @@ With the detector the scale is right, but on another hospital both models still 
 
 **Reading:** moving the four cuts together is not enough, because the bias is not uniform (healthy and doubtful knees are pushed up by about one grade, severe ones slightly down), so four free cut points win at every size, even with 10 knees. With **about 40 graded knees** a site gets most of the gain (+0.14 QWK for D, from 0.65 to 0.79; 10th percentile of the draws 0.76), and from 80 knees on it levels off near 0.80. Deployment: `python -m osteoclass.calibrate --fit --method cuts --pred <site predictions> --out cuts.json` (`notebooks/14_calibracion_local.ipynb`).
 
+## Distillation: the ensemble in a single model
+
+The ensemble of the four runs was the best internal result but costs four models. A student with exactly D's recipe (ConvNeXt-Tiny, 224 px, SORD, flip TTA, robustness augmentation) was trained with half of its loss replaced by the ensemble's class probabilities on each training image (`osteoclass.distill`, `--teacher` in `osteoclass.train`), so the comparison with D isolates the distillation. The teacher saw these images in training, but it was not memorizing them (train accuracy 78%, mean top probability 0.61). Model chosen on validation, Chen test evaluated once, paired bootstrap over patients:
+
+| Chen test, val-fitted cut points | D | Student | Difference (95% CI) | Ensemble of 4 |
+|---|---|---|---|---|
+| QWK | 0.866 | **0.872** | +0.005 (−0.001 to +0.012) | 0.874 |
+| Accuracy | 70.3% | 70.1% | −0.2 pp (−1.5 to +1.3) | 70.2% |
+| MAE | 0.325 | 0.322 | −0.003 (−0.018 to +0.011) | 0.316 |
+| AUC (KL ≥ 2) | 0.950 | 0.953 | +0.003 (0.000 to +0.005) | 0.955 |
+
+On Gornale with the detector crop the student scores like D (QWK 0.648 vs 0.645; recalibrated 0.809 both), with a slightly lower AUC (0.907 vs 0.917).
+
+**Reading:** one model reaches the ensemble's QWK at D's cost, but the gain over D is within the noise, as expected from the small gain of the ensemble itself. The demo keeps D, already checked end to end with the detector. Run: `notebooks/15_destilacion.ipynb`.
+
 ## Next
 
 1. External validation on a cohort not used for any decision (MOST), with access requested through the NIA AgingResearchBiobank.
