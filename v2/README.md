@@ -78,9 +78,12 @@ On one correctly classified test knee per grade, the heat maps sit on the **tibi
 
 **<https://huggingface.co/spaces/walterandres23/osteoclassai>**
 
-<p align="center"><img src="media/demo_web.png" width="760" alt="In-browser demo grading a KL4 knee"></p>
+<p align="center"><img src="media/demo_web_detector.png" width="760" alt="In-browser demo: the detector finds both knees of a radiograph from another hospital and each one is graded"></p>
+<p align="center"><sub>A bilateral radiograph from Gornale &amp; Patravali: the detector finds both knees and each is graded (KL3 and KL4; the local expert graded the pair KL2, the over-grading discussed in the external test).</sub></p>
 
 The demo runs **model D** (224 px, robustness augmentation, see Improvement 2): as good as B on the Chen test set, much less sensitive to other scanners and crops, and fast in the browser. Like the evaluation, it averages the image and its mirror. The model is exported to ONNX (`osteoclass.export_onnx`) with two outputs: the logits and a class activation map (the classifier applied at every location of the last feature map, so no gradients are needed). Weights are stored as int8 per output channel and dequantized on load: 111 MB → 28 MB, with **100% agreement** with the float model on 300 test images. The page (`web/index.html`) runs it with ONNX Runtime Web in about 4 s on a laptop CPU (two passes, image and mirror), and the X-ray never leaves the device. Hosted as a free static Hugging Face Space (`notebooks/04_publicar_demo.ipynb`).
+
+Since Improvement 4 the page first runs the **knee-joint detector** (int8, 11 MB; same knees as the float model on 200 test radiographs, crop IoU 0.985), crops each knee at the training scale and grades it, so full radiographs with one or both knees can be used; a square image where the knee fills the frame is taken as a crop of the joint and used as it is. About 5 s for one knee and 9 s for two (`notebooks/13_demo_detector.ipynb`).
 
 `app/` holds an equivalent Gradio version with Grad-CAM, for running locally (`python app/app.py` with `best.pt` next to it).
 
@@ -227,9 +230,8 @@ Run: `notebooks/10_detector_datos.ipynb` (data and crop rule, CPU), `notebooks/1
 
 ## Next
 
-1. Put the detector in the web demo (ONNX), before the classifier, showing the detected box, so that full radiographs can be graded.
-2. A local calibration step (cut points fitted on a small labeled sample) as part of deploying at a new site, with an estimate of how many knees it needs.
-3. External validation on a cohort not used for any decision (MOST), with access requested through the NIA AgingResearchBiobank.
+1. A local calibration step (cut points fitted on a small labeled sample) as part of deploying at a new site, with an estimate of how many knees it needs.
+2. External validation on a cohort not used for any decision (MOST), with access requested through the NIA AgingResearchBiobank.
 
 ## How to run
 
