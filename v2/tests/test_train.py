@@ -40,6 +40,19 @@ def test_train_smoke(tmp_path):
           "--bootstrap", "20", "--loss", "sord", "--tta", "--aug", "robust", "--out", str(tmp_path / "run2")])
     assert (tmp_path / "run2" / "results.json").exists()
 
+    # distillation: the two runs as teacher, then a student trained with it
+    from osteoclass.distill import main as distill
+    teacher = tmp_path / "teacher.csv"
+    distill(["--root", str(tmp_path), "--splits", str(tmp_path / "splits.csv"), "--runs", str(out),
+             str(tmp_path / "run2"), "--workers", "0", "--out", str(teacher)])
+    t = pd.read_csv(teacher)
+    assert len(t) == 20 and np.allclose(t[[f"p{k}" for k in range(5)]].sum(1), 1, atol=1e-4)
+    main(["--root", str(tmp_path), "--splits", str(tmp_path / "splits.csv"), "--model", "resnet18",
+          "--no-pretrained", "--size", "64", "--epochs", "1", "--batch", "8", "--workers", "0",
+          "--bootstrap", "20", "--loss", "sord", "--tta", "--teacher", str(teacher), "--out", str(tmp_path / "kd")])
+    res = json.loads((tmp_path / "kd" / "results.json").read_text())
+    assert res["config"]["teacher"] == str(teacher) and "qwk" in res["test"]
+
 
 def test_sord_and_cuts():
     import torch

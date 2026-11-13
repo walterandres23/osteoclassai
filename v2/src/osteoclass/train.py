@@ -6,6 +6,10 @@ Usage (Colab, GPU):
 
 Model selection uses only the validation split. The test split is evaluated once,
 at the end, with the best checkpoint.
+
+Distillation (``--teacher teacher_train.csv``, from ``osteoclass.distill``): the training loss becomes
+(1 - w) x the usual loss + w x cross-entropy with the teacher's class probabilities for that image
+(``--kd-weight`` w, default 0.5), weighted per class like the usual loss.
 """
 from __future__ import annotations
 
@@ -23,6 +27,37 @@ from torch.utils.data import DataLoader
 
 from .dataset import KneeDataset, build_transforms
 from .metrics import bootstrap_ci, kl5_metrics, tune_cuts
+
+
+class TeacherDataset(torch.utils.data.Dataset):
+    """Training images with the teacher's class probabilities (matched by image path)."""
+
+    def __init__(self, base: KneeDataset, teacher_csv: str | Path):
+        t = pd.read_csv(teacher_csv)
+        t["path"] = t.path.str.replace("\\", "/", regex=False)
+        probs = t.set_index("path")[[f"p{k}" for k in range(5)]]
+        paths = base.df.path.str.replace("\\", "/", regex=False)
+        missing = (~paths.isin(probs.index)).sum()
+        if missing:
+            raise ValueError(f"{missing} training images have no teacher probabilities in {teacher_csv}")
+        self.base = base
+        self.labels = base.labels
+        self.teacher = torch.tensor(probs.loc[paths].to_numpy(), dtype=torch.float32)
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, i):
+        x, y = self.base[i]
+        return x, y, self.teacher[i]
+
+
+def kd_loss(logits, teacher, y, weight=None):
+    loss = -(teacher * torch.log_softmax(logits.float(), 1)).sum(1)
+    if weight is not None:
+        w = weight.to(loss.device)[y]
+        return (loss * w).sum() / w.sum()
+    return loss.mean()
 
 
 def class_weights(labels: np.ndarray, n_classes: int) -> torch.Tensor:
@@ -83,6 +118,8 @@ def main(argv=None) -> None:
     ap.add_argument("--tta", action="store_true", help="average with the horizontally flipped image")
     ap.add_argument("--aug", choices=["base", "robust"], default="base",
                     help="'robust': wider zoom, black bands, gamma, contrast, sharpness and blur")
+    ap.add_argument("--teacher", help="CSV with the teacher's probabilities on the training images (distillation)")
+    ap.add_argument("--kd-weight", type=float, default=0.5)
     ap.add_argument("--out", default="outputs/runs/run")
     args = ap.parse_args(argv)
 
@@ -100,6 +137,8 @@ def main(argv=None) -> None:
     tf_train = build_transforms(args.size, train=True, aug=args.aug)
     tf_eval = build_transforms(args.size, train=False)
     ds = {s: KneeDataset(d, args.root, "kl5", tf_train if s == "train" else tf_eval) for s, d in parts.items()}
+    if args.teacher:
+        ds["train"] = TeacherDataset(ds["train"], args.teacher)
     dl = {s: DataLoader(ds[s], batch_size=args.batch, shuffle=(s == "train"), num_workers=args.workers,
                         pin_memory=device.type == "cuda") for s in ds}
 
@@ -116,11 +155,14 @@ def main(argv=None) -> None:
     for epoch in range(1, args.epochs + 1):
         model.train()
         t0, total, n = time.time(), 0.0, 0
-        for x, y in dl["train"]:
-            x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+        for batch in dl["train"]:
+            x, y = batch[0].to(device, non_blocking=True), batch[1].to(device, non_blocking=True)
             opt.zero_grad(set_to_none=True)
             with torch.autocast(device.type, enabled=device.type == "cuda"):
-                loss = crit(model(x), y)
+                logits = model(x)
+                loss = crit(logits, y)
+                if args.teacher:
+                    loss = (1 - args.kd_weight) * loss + args.kd_weight * kd_loss(logits, batch[2].to(device), y, cw)
             scaler.scale(loss).backward()
             scaler.step(opt)
             scaler.update()
