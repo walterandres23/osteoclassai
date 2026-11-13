@@ -65,3 +65,13 @@ def test_detector_smoke(tmp_path):
           "--workers", "0", "--no-pretrained"])
     res = json.loads((tmp_path / "run" / "results.json").read_text())
     assert set(res) >= {"val", "test", "best_epoch"} and res["test"]["knees"] == 4
+
+
+def test_decode_merges_duplicate_peaks():
+    heat, off, logw, mask = make_targets(BOXES[:1])
+    # a second, weaker peak two cells away on the same knee
+    iy, ix = np.argwhere(mask == 1)[0]
+    heat[iy, ix + 2] = 0.9
+    logw[iy, ix + 2] = logw[iy, ix]
+    assert len(decode(heat, off, logw)) == 1
+    assert len(decode(*make_targets(BOXES)[:3])) == 2

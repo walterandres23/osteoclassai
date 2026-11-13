@@ -169,11 +169,17 @@ async function detect(img) {
     }
     if (top) peaks.push([v, iy, ix]);
   }
-  return peaks.sort((a, b) => b[0] - a[0]).slice(0, 2).map(([v, iy, ix]) => {
+  const knees = [];
+  for (const [v, iy, ix] of peaks.sort((a, b) => b[0] - a[0])) {
     const i = iy * W + ix;
-    return { score: v, cx: ((ix + o[hw + i]) * STRIDE - px) / s, cy: ((iy + o[2 * hw + i]) * STRIDE - py) / s,
-             w: Math.exp(o[3 * hw + i]) * STRIDE / s };
-  }).sort((a, b) => a.cx - b.cx);
+    const k = { score: v, cx: ((ix + o[hw + i]) * STRIDE - px) / s, cy: ((iy + o[2 * hw + i]) * STRIDE - py) / s,
+                w: Math.exp(o[3 * hw + i]) * STRIDE / s };
+    // a second peak within half a box width of a kept knee is the same knee (as osteoclass.detect.decode)
+    if (knees.some(q => Math.hypot(k.cx - q.cx, k.cy - q.cy) < 0.5 * Math.max(k.w, q.w))) continue;
+    knees.push(k);
+    if (knees.length === 2) break;
+  }
+  return knees.sort((a, b) => a.cx - b.cx);
 }
 
 function cropKnee(img, k) {
@@ -234,8 +240,10 @@ async function run(img) {
   const t0 = performance.now();
   let knees = detSession ? await detect(img) : [];
   const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
-  // an image that is already a crop of the joint: the knee would fill it, so it is used as it is
-  knees = knees.filter(k => CROP * k.w < 0.9 * Math.min(w, h));
+  // a square image where the knee fills most of the frame is already a crop of the joint: used as it is
+  // (single-knee radiographs are not square, so they still go through the detector)
+  const square = Math.abs(w / h - 1) < 0.15;
+  if (square && knees.length && CROP * Math.max(...knees.map(k => k.w)) >= 0.75 * Math.min(w, h)) knees = [];
   const inputs = knees.length ? knees.map(k => cropKnee(img, k)) : [img];
   results = [];
   for (const src of inputs) results.push(await classify(src));

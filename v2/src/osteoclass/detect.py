@@ -70,13 +70,18 @@ def decode(heat: np.ndarray, off: np.ndarray, logw: np.ndarray, k: int = 2, thr:
     pad = np.pad(heat, 1, constant_values=-1)
     neigh = np.max(np.stack([pad[dy:dy + OUT_H, dx:dx + OUT_W] for dy in range(3) for dx in range(3)]), 0)
     peaks = np.argwhere((heat >= neigh) & (heat >= thr))
-    order = np.argsort(-heat[peaks[:, 0], peaks[:, 1]])[:k]
+    order = np.argsort(-heat[peaks[:, 0], peaks[:, 1]])
     knees = []
     for iy, ix in peaks[order]:
         cx = (ix + off[0, iy, ix]) * STRIDE
         cy = (iy + off[1, iy, ix]) * STRIDE
-        knees.append({"score": float(heat[iy, ix]), "cx": float(cx), "cy": float(cy),
-                      "w": float(math.exp(logw[iy, ix]) * STRIDE)})
+        w = float(math.exp(logw[iy, ix]) * STRIDE)
+        # a second peak within half a box width of a kept knee is the same knee
+        if any(math.hypot(cx - q["cx"], cy - q["cy"]) < 0.5 * max(w, q["w"]) for q in knees):
+            continue
+        knees.append({"score": float(heat[iy, ix]), "cx": float(cx), "cy": float(cy), "w": w})
+        if len(knees) == k:
+            break
     return sorted(knees, key=lambda d: d["cx"])
 
 
