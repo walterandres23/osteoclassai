@@ -1,8 +1,19 @@
 # OsteoClassAI
 
-**Knee osteoarthritis grading from X-rays with deep learning (Kellgren-Lawrence scale).**
+**Knee osteoarthritis grading from X-rays with deep learning (Kellgren-Lawrence scale), validated on a second hospital and fixed where it failed.**
 
-**▶ [Live demo](https://huggingface.co/spaces/walterandres23/osteoclassai)**: upload a knee X-ray and get the KL grade and a heat map. The model runs in your browser (ONNX Runtime Web), so the image never leaves your device.
+**▶ [Live demo](https://huggingface.co/spaces/walterandres23/osteoclassai)**: drop a knee radiograph (one knee, both knees, or a crop of the joint). A detector finds each knee, a classifier grades it and shows a heat map, all in your browser (ONNX Runtime Web): the image never leaves your device.
+
+<p align="center"><img src="v2/media/demo_web_detector.png" width="760" alt="Demo: the detector finds both knees of a radiograph from another hospital and each one is graded"></p>
+
+## At a glance
+
+- **Internal test** (Osteoarthritis Initiative, 1,656 knees, patient-disjoint): **QWK 0.867**, AUC 0.95 for osteoarthritis (KL ≥ 2); 0.874 with an ensemble, 0.872 distilled into a single model.
+- **External test** on 1,251 knees from hospitals in India (Gornale & Patravali), with the protocol fixed before looking: agreement fell to **QWK 0.37**. Diagnosis: wrong **scale** of the knee in the image, and **grades shifted** up against the local experts.
+- **Fixes, each measured:** robustness augmentation (0.57); a **knee-joint detector** that crops every knee at the training scale (**0.65**, AUC 0.92, 100% of knees found); **local calibration** with about **40 graded knees** from the new site (**0.79**).
+- **Engineering:** PyTorch + timm, CenterNet-style detector, int8 ONNX for the browser (detector 11 MB, classifier 28 MB), pytest suite, one Colab notebook per experiment, bootstrap confidence intervals by patient.
+
+Details, tables and every experiment: [`v2/`](v2/). External results after the first test are exploratory, because that dataset then informed decisions; a cohort never used for any decision (MOST) is the next step.
 
 This repository holds two versions of the same project:
 
@@ -10,11 +21,12 @@ This repository holds two versions of the same project:
 |---|---|---|
 | Context | Course project, Electromedicine, Universidad de Ibagué. Shown at the 48th METIE | Personal follow-up that fixes the v1 methodology |
 | Input | Sobel edge maps | Original radiographs |
-| Model | VGG19 + custom attention layers (Keras) | ConvNeXt-Tiny (PyTorch, timm), ordinal loss (SORD) + flip TTA |
+| Model | VGG19 + custom attention layers (Keras) | Knee-joint detector + ConvNeXt-Tiny (PyTorch, timm), ordinal loss (SORD) + flip TTA |
 | Classes | 3 groups (KL0 / KL1–2 / KL3–4) | 5 KL grades + binary KL ≥ 2 |
 | Split | Random, per image (leaks) | Original **patient-disjoint** split, audited |
 | Test result, 3 classes | 77.1% accuracy (inflated by leakage, see below) | **81.3%** (95% CI 79.2–83.2%) on a clean, patient-disjoint test set |
 | Test result, 5 grades | – | **QWK 0.867**, 70.4% accuracy, MAE 0.327; KL ≥ 2: AUC 0.955, sens. 77.1%, spec. 94.8% |
+| Other hospital (Gornale & Patravali) | – | QWK 0.37 → 0.65 with the detector → 0.79 with 40 locally graded knees |
 | Folder | [`v1-2024/`](v1-2024/) | [`v2/`](v2/) |
 
 <p align="center"><img src="v1-2024/media/interface.jpg" width="720" alt="v1 desktop interface: original X-ray, Sobel edges and predicted class"></p>
